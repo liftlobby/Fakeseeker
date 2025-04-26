@@ -1,3 +1,4 @@
+# --- Python ---
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -9,9 +10,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -28,39 +27,76 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-*.spec
-/dist/  # Explicitly ignore dist folder within project
-/build/ # Explicitly ignore build folder
-
-# Virtual Environments
-venv/    # Ignore the specific name you use
+# --- Virtual Environments ---
+# Add the specific name(s) you use
+venv/
 .venv/
 env/
 .env/
-# ... (other venv patterns)
+ENV/
+env.bak/
+venv.bak/
 
-# Logs and user data (Good practice to ignore these in repo)
-logs/
-user_data/ # If using this fallback
+# --- PyInstaller ---
+# Log file
 *.log
-# Don't commit history or downloaded models to Git
-reports/scan_history.json # Adjust path if saved elsewhere by appdirs
-reports/thumbnails/
-models/run_*/ # Ignore training run outputs
-models/best_model*.pth # Ignore specific models in source
-models/final_model*.pth
-optimal_threshold_*.json # Ignore timestamped thresholds
+# Buid directory
+build/
+# Distribution directory
+dist/
+# Spec file
+*.spec
 
-# IDE / Editor specific files
+# --- Project Specific ---
+# Logs directory (created by logger_setup.py)
+logs/
+
+# Reports directory (created by appdirs logic)
+# If you want to track an empty folder structure, add a .gitkeep file inside
+# reports/ and reports/thumbnails/ and comment these lines out.
+# Generally, generated reports/history are NOT tracked.
+reports/scan_history.json
+reports/thumbnails/
+
+# User data directory (created by appdirs logic)
+# Contains reports/, thumbnails/, models/, version.txt etc.
+# Ensure this matches the 'user_data_dir' name if using the fallback
+user_data/
+
+# Downloaded models or training outputs (should be in user_model_dir or separate)
+models/run_*/
+models/best_model*.pth
+models/final_model*.pth
+# Don't commit downloaded models (they go in user_model_dir which should be ignored via user_data/ or reports/)
+# optimal_threshold_*.json # Timestamped versions from training runs
+
+# --- IDE / Editor Files ---
+# VS Code
 .vscode/
+# PyCharm
 .idea/
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+# Other
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
-*.sw?
 
-# Other
-.DS_Store # macOS specific
-Thumbs.db # Windows specific
+# --- OS Files ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+# Linux
+*~
+# --- Other ---
+# Temporary files
+*.tmp
+*.bak
+*.swp
