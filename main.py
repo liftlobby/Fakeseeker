@@ -17,6 +17,8 @@ import queue
 import sys
 import ctypes
 import appdirs
+import hashlib
+import requests
 
 # logic
 from deepfake_detector import DeepfakeDetector
@@ -1377,6 +1379,178 @@ class FakeSeekerApp:
                 logger.info(f"Scan history successfully updated: {history_path}")
             except Exception as e:
                 logger.error(f"Error writing scan history {history_path}: {e}", exc_info=True)
+
+    def check_for_updates(self, background=True):
+        """Checks server for new model/threshold versions."""
+        if background:
+            # Run check in a separate thread to avoid blocking UI on start
+            thread = threading.Thread(target=self._perform_update_check, daemon=True)
+            thread.start()
+        else:
+            # Run synchronously (e.g., from a button click - add button later if desired)
+            self._perform_update_check()
+
+    def _perform_update_check(self):
+        """Internal helper to perform the update check logic."""
+        logger.info("Checking for updates...")
+        version_url = "https://raw.githubusercontent.com/liftlobby/Fakeseeker/refs/heads/main/version.json"
+
+        if version_url == "YOUR_HOSTED_VERSION_JSON_URL":
+             logger.warning("Update check URL is not configured. Skipping check.")
+             return # Don't proceed if URL is not set
+
+        try:
+            # Read local version (create file if doesn't exist)
+            local_version = "0.0.0" # Default if no file exists
+            os.makedirs(os.path.dirname(self.local_version_file), exist_ok=True)
+            if os.path.exists(self.local_version_file):
+                try:
+                    with open(self.local_version_file, 'r', encoding='utf-8') as f:
+                        local_version = f.read().strip()
+                        if not local_version: local_version = "0.0.0" # Handle empty file
+                except Exception as read_err:
+                     logger.error(f"Error reading local version file: {read_err}. Assuming 0.0.0")
+                     local_version = "0.0.0"
+
+            logger.info(f"Local version: {local_version}")
+
+            # Fetch server version manifest
+            logger.debug(f"Fetching update manifest from: {version_url}")
+            response = requests.get(version_url, timeout=15) # Increased timeout slightly
+            response.raise_for_status() # Raise error for bad status codes (4xx, 5xx)
+            manifest = response.json()
+            server_version = manifest.get('version', '0.0.0')
+            logger.info(f"Server version: {server_version}")
+
+            # Simple string comparison (for versions like 1.0.0, 1.1.0, 2.0.0)
+            # For more complex versions (e.g., 1.0.0-beta), use 'packaging' library:
+            # from packaging import version
+            # if version.parse(server_version) > version.parse(local_version):
+            if server_version > local_version:
+                logger.info("Update available!")
+                # Ask user on main thread using root.after (safer than direct call)
+                # Ensure root window still exists before scheduling
+                if hasattr(self.root, 'after') and self.root.winfo_exists():
+                     self.root.after(0, lambda m=manifest: self._ask_user_to_update(m))
+                else:
+                     logger.warning("Root window gone, cannot ask user to update.")
+            else:
+                logger.info("Application is up-to-date.")
+                # Optionally inform user if check was manual via a button later
+
+        except requests.exceptions.Timeout:
+             logger.error("Network timeout checking for updates.")
+             # Inform user only if check was manual? Avoid bothering on startup timeout.
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error checking for updates: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding version manifest from {version_url}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error checking for updates: {e}", exc_info=True)
+
+    def _ask_user_to_update(self, manifest):
+        """Runs in main thread to ask user via messagebox."""
+        if not self.root.winfo_exists(): return # Abort if window closed
+
+        notes = manifest.get('release_notes', 'No details available.')
+        server_version = manifest.get('version', 'N/A')
+        msg = f"A new version ({server_version}) is available!\n\nChanges:\n{notes}\n\nDownload model and threshold update now?"
+        try:
+             if messagebox.askyesno("Update Available", msg):
+                 logger.info("User accepted update. Starting download.")
+                 # Start download in background thread
+                 thread = threading.Thread(target=self._download_update_files, args=(manifest,), daemon=True)
+                 thread.start()
+             else:
+                 logger.info("User declined update.")
+        except Exception as e:
+             logger.error(f"Error showing update dialog: {e}")
+
+    def _download_update_files(self, manifest):
+        """Downloads model and threshold in a background thread."""
+        logger.info("Starting update download process...")
+        # Ensure target directories exist (should have been done in _setup_directories)
+        try:
+             os.makedirs(self.user_model_dir, exist_ok=True)
+             os.makedirs(os.path.dirname(self.user_threshold_path), exist_ok=True)
+        except Exception as e:
+             logger.error(f"Failed to create user directories for update: {e}")
+             self.root.after(0, lambda: messagebox.showerror("Update Failed", f"Could not create necessary directories:\n{e}"))
+             return
+
+        model_url = manifest.get('model_url')
+        threshold_url = manifest.get('threshold_url')
+        model_filename = manifest.get('model_filename') # Use filename from manifest
+        server_version = manifest.get('version', 'unknown') # Get version to save
+
+        if not model_url or not threshold_url or not model_filename:
+             logger.error("Update manifest is missing required URLs or model filename.")
+             self.root.after(0, lambda: messagebox.showerror("Update Failed", "Update information from server is incomplete."))
+             return
+
+        model_save_path = os.path.join(self.user_model_dir, model_filename)
+        threshold_save_path = self.user_threshold_path
+
+        try:
+            # Download Model (with simple progress logging)
+            logger.info(f"Downloading model from {model_url} to {model_save_path}")
+            total_size = 0
+            with requests.get(model_url, stream=True, timeout=60) as r: # Longer timeout for model
+                 r.raise_for_status()
+                 total_size = int(r.headers.get('content-length', 0))
+                 bytes_downloaded = 0
+                 last_log_time = time.time()
+                 with open(model_save_path, 'wb') as f:
+                      for chunk in r.iter_content(chunk_size=8192 * 4): # Larger chunk size
+                           f.write(chunk)
+                           bytes_downloaded += len(chunk)
+                           # Log progress periodically
+                           current_time = time.time()
+                           if total_size > 0 and current_time - last_log_time > 2: # Log every 2 seconds
+                                progress = (bytes_downloaded / total_size) * 100
+                                logger.info(f"Model download progress: {progress:.1f}%")
+                                last_log_time = current_time
+            logger.info(f"Model download complete ({bytes_downloaded} bytes).")
+
+            # Checksum verification
+            checksum_expected = manifest.get('model_checksum')
+            if checksum_expected: 
+                # Calculate hash of downloaded file
+                with open(model_save_path, 'rb') as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()
+                if file_hash != checksum_expected:
+                    logger.error(f"Model checksum verification failed: Expected {checksum_expected}, got {file_hash}")
+                    self.root.after(0, lambda: messagebox.showerror("Update Failed", "Model checksum verification failed. Please try again."))
+                    return
+
+            # Download Threshold
+            logger.info(f"Downloading threshold from {threshold_url} to {threshold_save_path}")
+            response_thresh = requests.get(threshold_url, timeout=15)
+            response_thresh.raise_for_status()
+            with open(threshold_save_path, 'wb') as f: 
+                f.write(response_thresh.content)
+            logger.info("Threshold download complete.")
+
+            # Update local version file
+            try:
+                 with open(self.local_version_file, 'w', encoding='utf-8') as f:
+                     f.write(server_version)
+                 logger.info(f"Local version updated to {server_version}")
+            except Exception as vf_err:
+                 logger.error(f"Failed to write local version file: {vf_err}")
+
+            # Inform user on main thread
+            if hasattr(self.root, 'after') and self.root.winfo_exists():
+                 self.root.after(0, lambda: messagebox.showinfo("Update Complete", f"Update {server_version} downloaded successfully.\nPlease restart the application to use the new model."))
+
+        except requests.exceptions.RequestException as e:
+             logger.error(f"Download error: {e}")
+             if hasattr(self.root, 'after') and self.root.winfo_exists():
+                  self.root.after(0, lambda: messagebox.showerror("Update Failed", f"Download failed:\n{e}"))
+        except Exception as e:
+             logger.error(f"Error saving downloaded files: {e}", exc_info=True)
+             if hasattr(self.root, 'after') and self.root.winfo_exists():
+                  self.root.after(0, lambda: messagebox.showerror("Update Failed", f"Could not save downloaded files:\n{e}"))
 
     def get_file_details(self, file_path):
         """Get detailed information about the file."""

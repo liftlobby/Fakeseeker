@@ -3,17 +3,28 @@ from tkinter import ttk
 from PIL import Image, ImageTk, ImageDraw
 import os
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+        # logger.debug(f"Accessing bundled resource from _MEIPASS: {base_path}") # Logger might not be ready here
+    except Exception:
+        # If not bundled, use the script's directory
+        base_path = os.path.abspath(os.path.dirname(__file__))
+        # logger.debug(f"Accessing resource from script path: {base_path}")
+    path = os.path.join(base_path, relative_path)
+    return path
 
 class Sidebar(ttk.Frame):
     def __init__(self, parent, controller):
         logger.debug("Sidebar init start")
         super().__init__(parent)
         self.controller = controller
-
-        self.images_dir = controller.images_dir
-        self.base_dir = controller.base_dir
 
         button_container = ttk.Frame(self)
         button_container.pack(expand=True, fill=tk.Y, pady=(150, 150)) # Adjust padding
@@ -27,62 +38,43 @@ class Sidebar(ttk.Frame):
             "History": "results.png",
         }
         self.sidebar_icons = {}
+
+        default_icon_img = Image.new("RGBA", icon_size, (200, 200, 200, 255)) # Create fallback base image
+        default_icon = ImageTk.PhotoImage(default_icon_img) # Keep default TK image reference
+        # Load icons
         for name, fname in icon_paths_rel.items():
             # Use resource_path to get full path
             full_path = resource_path(os.path.join('images', fname))
-            self.sidebar_icons[name] = self._resize_icon(full_path, icon_size)
+            icon = self._resize_icon(full_path, icon_size)
+            self.sidebar_icons[name] = icon if icon else default_icon
+            if icon is None:
+                logger.warning(f"Using fallback icon for button: {name}")
+        
+        # Ensure Home icon fallback works if needed (uses default_icon reference)
+        if self.sidebar_icons.get("Home") is default_icon:
+            logger.warning("Using fallback icon for Home button.")
 
         sidebar_button_data = [
-            ('Upload Image/Video', self.sidebar_icons['Upload'], self.controller.show_upload_page),
-            ('Real-Time Detection', self.sidebar_icons['Real-Time'], self.controller.show_realtime_page),
-            ('View Scan History', self.sidebar_icons['History'], self.controller.show_history_page),
-            ('Home', self.sidebar_icons['Home'], self.controller.show_home_page) # Add a Home button?
+            ('Upload Image/Video', self.sidebar_icons.get('Upload'), self.controller.show_upload_page),
+            ('Real-Time Detection', self.sidebar_icons.get('Real-Time'), self.controller.show_realtime_page),
+            ('View Scan History', self.sidebar_icons.get('History'), self.controller.show_history_page),
+            ('Home', self.sidebar_icons.get('Home'), self.controller.show_home_page)
         ]
 
         self.sidebar_buttons = []
-        default_icon_img = Image.new("RGBA", icon_size, (200, 200, 200, 255))
-        default_icon = ImageTk.PhotoImage(default_icon_img)
-
-        # Load Home icon if it exists
-        home_icon_path = os.path.join(self.images_dir, 'home.png') # Assuming home.png exists
-        home_icon = self._resize_icon(home_icon_path, icon_size)
-        if not home_icon:
-            # Basic fallback shape if home.png is missing
-            draw = ImageDraw.Draw(default_icon_img)
-            # Corrected polygon points for a simple house shape
-            half_w = icon_size[0] // 2
-            half_h = icon_size[1] // 2
-            draw.polygon([
-                (half_w, 2), # Top point
-                (2, half_h - 2), # Top-left roof
-                (icon_size[0] - 2, half_h - 2), # Top-right roof
-            ], outline='gray', fill=None)
-            draw.rectangle([
-                (4, half_h - 1),
-                (icon_size[0] - 4, icon_size[1] - 2)
-            ], outline='gray', fill=None)
-            default_icon = ImageTk.PhotoImage(default_icon_img)
-            home_icon = default_icon # Use fallback
-
-
-        sidebar_button_data[3] = ('Home', home_icon, self.controller.show_home_page)
-
-
         for idx, (text, icon, command) in enumerate(sidebar_button_data):
-            # Ensure icon is valid PhotoImage
-            current_icon = icon if icon else default_icon
-            if not isinstance(current_icon, ImageTk.PhotoImage):
-                 current_icon = default_icon # Fallback if resize failed
-
-            btn = ttk.Button(button_container, text='', image=current_icon,
+            # Icon should be a valid PhotoImage by now (loaded or default)
+            btn = ttk.Button(button_container, text='', image=icon,
                              compound=tk.LEFT, command=command, width=3)
-            btn.image = current_icon # Keep reference
+            btn.image = icon # Keep reference
             btn.pack(fill=tk.X, pady=5, padx=3)
             self.sidebar_buttons.append((btn, text))
 
         self.bind('<Enter>', self.expand_sidebar)
         self.bind('<Leave>', self.collapse_sidebar)
         self.collapse_sidebar(None) # Start collapsed
+        logger.debug("Sidebar init end")
+
 
     def _resize_icon(self, icon_path, size):
         try:
@@ -91,10 +83,10 @@ class Sidebar(ttk.Frame):
                 icon = icon.resize(size, Image.Resampling.LANCZOS)
                 return ImageTk.PhotoImage(icon)
             else:
-                logger.warning(f"Icon not found: {icon_path}") # Now logger exists
+                logger.warning(f"Icon not found: {icon_path}")
                 return None
         except Exception as e:
-            logger.error(f"Error resizing icon {icon_path}: {e}", exc_info=True) # Now logger exists
+            logger.error(f"Error resizing icon {icon_path}: {e}", exc_info=True)
             return None
 
     def expand_sidebar(self, event):
