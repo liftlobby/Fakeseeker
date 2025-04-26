@@ -64,11 +64,6 @@ class DeepfakeDetector:
         if self.user_model_dir and os.path.exists(self.user_model_dir):
              search_paths.append(self.user_model_dir)
              logger.info(f"Adding user model dir to search path: {self.user_model_dir}")
-        # Example: Add fallback default model dir IF you bundle one
-        # default_model_bundled_path = resource_path('default_model')
-        # if os.path.exists(default_model_bundled_path):
-        #      search_paths.append(default_model_bundled_path)
-        #      logger.info(f"Adding default model dir to search path: {default_model_bundled_path}")
 
         model_path = self.get_latest_model_path(search_paths)
 
@@ -85,6 +80,9 @@ class DeepfakeDetector:
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+
+        logger.info(f"Instantiating model: {model_version}")
+        self.model = EfficientNet.from_pretrained(model_version, num_classes=2).to(self.device)
 
         # Load model weights
         try:

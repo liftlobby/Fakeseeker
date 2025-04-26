@@ -121,7 +121,7 @@ class FakeSeekerApp:
         self._setup_directories()
 
         try:
-            self.face_extractor = FaceExtractor(...) # Pass config if needed
+            self.face_extractor = FaceExtractor(min_confidence=0.9, min_face_size=50)
             # Pass user paths so detector knows where to look first
             self.detector = DeepfakeDetector(
                 user_model_dir=self.user_model_dir,
@@ -559,8 +559,7 @@ class FakeSeekerApp:
                 thumb_path = os.path.join(scan_thumbnails_dir, f'face_{i}.png')
                 try:
                     face.save(thumb_path, "PNG")
-                    rel_path = os.path.relpath(thumb_path, self.base_dir)
-                    face_thumbnails_rel_paths.append(rel_path)
+                    face_thumbnails_rel_paths.append(thumb_path)
                     valid_faces_for_analysis.append(face) # Add face if thumb saved
                 except Exception as save_err:
                     logger.error(f"Worker: Failed to save thumbnail {i}: {save_err}")
@@ -1252,16 +1251,16 @@ class FakeSeekerApp:
             # Clean up corresponding scan thumbnails if discarded
             if scan_data.get('face_thumbnails'):
                 try:
-                    first_thumb_abs = os.path.join(self.base_dir, scan_data['face_thumbnails'][0])
+                    first_thumb_abs = scan_data['face_thumbnails'][0]
                     scan_thumb_dir = os.path.dirname(first_thumb_abs)
                     # Basic safety check: ensure we are deleting within the expected thumbnails dir
                     if os.path.exists(scan_thumb_dir) and scan_thumb_dir.startswith(self.thumbnails_dir):
                         shutil.rmtree(scan_thumb_dir)
                         logger.info(f"Discarded thumbnails directory: {scan_thumb_dir}")
                     else:
-                         logger.warning(f"Refusing to delete potentially incorrect directory: {scan_thumb_dir}")
+                        logger.warning(f"Refusing to delete potentially incorrect directory: {scan_thumb_dir}")
                 except IndexError:
-                     logger.warning("Thumbnail list was empty when trying to discard.")
+                    logger.warning("Thumbnail list was empty when trying to discard.")
                 except Exception as e:
                     logger.warning(f"Could not remove discarded thumbnails dir: {e}")
 
@@ -1336,26 +1335,48 @@ class FakeSeekerApp:
              messagebox.showwarning("Not Found", "Could not find the specified scan result to delete.")
 
     def update_scan_history(self, new_entry):
-        history_path = os.path.join("reports", "scan_history.json")
+        # --- CORRECTED LINE: Use self.history_file ---
+        history_path = self.history_file
+        # --- End Correction ---
         history = []
+        logger.debug(f"Attempting to update history file: {history_path}")
 
-        if os.path.exists(history_path):
-            try:
-                with open(history_path, 'r') as f:
-                    history = json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading scan history: {e}")
+        # Use lock for thread safety
+        with history_lock:
+            if os.path.exists(history_path):
+                try:
+                    # Read existing history inside the lock
+                    with open(history_path, 'r', encoding='utf-8') as f: # Add encoding
+                        loaded_data = json.load(f)
+                        if isinstance(loaded_data, list):
+                            history = loaded_data
+                        else:
+                            logger.warning(f"History file format error {history_path}, resetting.")
+                            history = []
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to decode history JSON from {history_path}. Resetting.", exc_info=True)
+                    history = []
+                except Exception as e:
+                    logger.error(f"Error reading scan history {history_path}: {e}", exc_info=True)
+                    history = []
+            else:
+                logger.info(f"History file {history_path} not found, creating new list.")
                 history = []
 
-        # Append new entry (real-time summary or detailed scan)
-        history.append(new_entry)
+            # Append new entry (e.g., real-time summary)
+            history.append(new_entry)
+            # Update the in-memory history as well
+            self.scan_history = history # Keep in-memory list consistent
 
-        try:
-            with open(history_path, 'w') as f:
-                json.dump(history, f, indent=4)
-            logger.info("Scan history updated.")
-        except Exception as e:
-            logger.error(f"Error writing scan history: {e}")
+            # Write the entire updated list back
+            try:
+                # Ensure directory exists (might be redundant but safe)
+                os.makedirs(os.path.dirname(history_path), exist_ok=True)
+                with open(history_path, 'w', encoding='utf-8') as f: # Add encoding
+                    json.dump(history, f, indent=4)
+                logger.info(f"Scan history successfully updated: {history_path}")
+            except Exception as e:
+                logger.error(f"Error writing scan history {history_path}: {e}", exc_info=True)
 
     def get_file_details(self, file_path):
         """Get detailed information about the file."""

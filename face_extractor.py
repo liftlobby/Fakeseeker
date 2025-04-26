@@ -188,22 +188,6 @@ class FaceExtractor:
             logger.error(f"Error in get_face_location: {e}", exc_info=True) # Use logger
             return None
 
-    def save_extracted_faces(self, faces: List[Image.Image], output_dir: str) -> List[str]:
-        """ Save extracted faces to directory. """
-        os.makedirs(output_dir, exist_ok=True)
-        saved_paths = []
-        logger.info(f"Saving {len(faces)} faces to directory: {output_dir}")
-        for i, face in enumerate(faces):
-            try:
-                output_path = os.path.join(output_dir, f'face_{i}.jpg')
-                face.save(output_path, "JPEG") # Specify format
-                saved_paths.append(output_path)
-            except Exception as e:
-                logger.error(f"Error saving face {i} to {output_path}: {e}", exc_info=True) # Use logger
-                continue
-        logger.info(f"Successfully saved {len(saved_paths)} faces.")
-        return saved_paths
-
     def cleanup(self):
         """Removes the temporary directory."""
         try:
