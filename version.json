@@ -1,0 +1,8 @@
+{
+    "version": "1.1.0",
+    "model_filename": "best_model_DEFAULT.pth",
+    "model_url": "https://github.com/liftlobby/Fakeseeker/releases/download/v1.1.0/best_model_DEFAULT.pth",
+    "threshold_url": "https://github.com/liftlobby/Fakeseeker/releases/download/v1.1.0/optimal_threshold.json",
+    "release_notes": "Model v1.1: Improved detection for deepfakes.",
+    "model_checksum": "sha256_hash_optional"
+  }
