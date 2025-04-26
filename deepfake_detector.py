@@ -65,7 +65,20 @@ class DeepfakeDetector:
              search_paths.append(self.user_model_dir)
              logger.info(f"Adding user model dir to search path: {self.user_model_dir}")
 
-        model_path = self.get_latest_model_path(search_paths)
+        # --- ADD FALLBACK DEFAULT MODEL PATH ---
+        try:
+             # Look for the 'default_model' folder bundled via resource_path
+             default_model_bundled_dir = resource_path('default_model')
+             if os.path.isdir(default_model_bundled_dir):
+                  search_paths.append(default_model_bundled_dir)
+                  logger.info(f"Adding bundled default model dir to search path: {default_model_bundled_dir}")
+             else:
+                  logger.info("No bundled default model directory found.")
+        except Exception as e:
+             logger.warning(f"Error trying to access bundled default model path: {e}")
+        # --- End Addition ---
+
+        model_path = self.get_latest_model_path(search_paths) # Search both user and default
 
         if not model_path:
             logger.critical("FATAL: No model file found in any search path!")
@@ -126,7 +139,24 @@ class DeepfakeDetector:
                 logger.warning(f"No 'run_*' directories found in search paths.")
                 # If no runs found, maybe check directly in user_model_dir for a loose .pth?
                 # Or check default_model_dir for a specific default filename? (Added complexity)
-                return None
+                if not all_run_dirs:
+                    logger.warning(f"No 'run_*' directories found in search paths: {search_paths}.")
+                    # Check if any search path *itself* contains a .pth file (for the default model case)
+                    for base_path in search_paths:
+                        try:
+                            # Look directly in the path (e.g., default_model/) for a .pth file
+                            model_files = [f for f in os.listdir(base_path) if f.endswith('.pth')]
+                            if model_files:
+                                logger.info(f"Found loose model file(s) in fallback path: {base_path}. Selecting latest.")
+                                full_model_paths = [os.path.join(base_path, f) for f in model_files]
+                                full_model_paths.sort(key=os.path.getmtime, reverse=True)
+                                best_model_path = full_model_paths[0]
+                                logger.info(f"Selected model file: {best_model_path}")
+                                return best_model_path # Return the directly found model
+                        except Exception as e:
+                            logger.error(f"Error checking for loose models in {base_path}: {e}")
+                    logger.error("No run_* directories and no loose models found.")
+                    return None # Truly no model found
 
         # Find the directory modified most recently (heuristic for latest run)
         try:
