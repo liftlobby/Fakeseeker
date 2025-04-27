@@ -117,7 +117,6 @@ class DeepfakeDetector:
         """Finds the latest model file within provided search paths.
            Searches within 'run_*/' subdirs first, then for loose '.pth' files."""
         best_model_found = None
-        latest_mtime = 0
 
         if not search_paths:
             logger.warning("No search paths provided to get_latest_model_path.")
@@ -151,7 +150,6 @@ class DeepfakeDetector:
                     full_model_paths = [os.path.join(latest_run_dir, f) for f in model_files]
                     full_model_paths.sort(key=os.path.getmtime, reverse=True) # Get most recent model file
                     best_model_found = full_model_paths[0]
-                    latest_mtime = os.path.getmtime(best_model_found)
                     logger.info(f"Found latest model in run directory: {best_model_found}")
                 else:
                     logger.warning(f"No best_model or final_model found in latest run dir: {latest_run_dir}")
@@ -178,7 +176,6 @@ class DeepfakeDetector:
                 all_loose_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
                 # Select the overall latest loose model found
                 best_model_found = all_loose_models[0]
-                latest_mtime = os.path.getmtime(best_model_found) # Update mtime if needed, though not strictly necessary now
             else:
                 logger.error("No run_* directories AND no loose .pth models found in any search path.")
                 return None # Truly no model found

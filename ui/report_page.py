@@ -71,10 +71,9 @@ class ReportPage(ttk.Frame):
 
     def _load_thumbnail(self, rel_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
-        # Use controller's base_dir for robustness
-        abs_path = os.path.join(self.controller.base_dir, rel_path)
-        if not os.path.exists(abs_path):
-            logger.warning(f"Thumbnail path not found: {abs_path}")
+        # Basic check if the provided path exists
+        if not abs_path or not os.path.exists(abs_path): # Check if path is valid
+            logger.warning(f"Thumbnail absolute path not found or invalid: {abs_path}")
             return None
 
         cache_key = (abs_path, size)

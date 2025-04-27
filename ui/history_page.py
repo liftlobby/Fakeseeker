@@ -71,9 +71,10 @@ class HistoryPage(ttk.Frame):
 
     def _load_thumbnail(self, rel_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
-        abs_path = os.path.join(self.controller.base_dir, rel_path)
-        if not os.path.exists(abs_path):
-             return None # Image file missing
+        # Basic check if the provided path exists
+        if not abs_path or not os.path.exists(abs_path): # Check if path is valid
+            logger.warning(f"Thumbnail absolute path not found or invalid: {abs_path}")
+            return None
 
         # Use cache if available
         cache_key = (abs_path, size)
@@ -86,9 +87,12 @@ class HistoryPage(ttk.Frame):
             photo = ImageTk.PhotoImage(img)
             self.thumbnail_cache[cache_key] = photo # Store in cache
             return photo
+        except FileNotFoundError:
+            logger.error(f"[ReportPage] Thumbnail file not found during open: {abs_path}")
+            self.thumbnail_cache[cache_key] = None
+            return None
         except Exception as e:
-            print(f"[HistoryPage ERROR] Failed loading thumbnail {abs_path}: {e}")
-            # Cache the failure to avoid retrying constantly
+            logger.error(f"[ReportPage] Failed loading thumbnail {abs_path}: {e}", exc_info=True)
             self.thumbnail_cache[cache_key] = None
             return None
 

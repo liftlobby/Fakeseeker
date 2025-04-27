@@ -90,8 +90,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # *** VERIFY THIS FILENAME ***
-    icon=os.path.join('images', 'app_icon.ico'), # Or 'fakeseeker_logo.ico'?
+    icon=os.path.join('images', 'fakeseeker_logo.ico'),
 )
 
 coll = COLLECT(
