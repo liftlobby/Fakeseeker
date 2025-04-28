@@ -69,7 +69,7 @@ class HistoryPage(ttk.Frame):
         try: return float(value)
         except: return 0.0
 
-    def _load_thumbnail(self, rel_path, size=(150, 150)):
+    def _load_thumbnail(self, abs_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
         # Basic check if the provided path exists
         if not abs_path or not os.path.exists(abs_path): # Check if path is valid

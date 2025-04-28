@@ -198,13 +198,13 @@ class ReportPage(ttk.Frame):
             ttk.Label(grid_frame, text="No face thumbnails available.", style='Detail.TLabel', background="#FFFFFF").pack()
         else:
             max_cols = 4 # Faces per row
-            for i, rel_path in enumerate(face_thumbnails):
+            for i, abs_path in enumerate(face_thumbnails):
                 row_idx = i // max_cols
                 col_idx = i % max_cols
                 face_container = ttk.Frame(grid_frame, padding=5, style="WhiteBackground.TFrame")
                 face_container.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky="n")
 
-                photo = self._load_thumbnail(rel_path, size=(120, 120))
+                photo = self._load_thumbnail(abs_path, size=(120, 120))
 
                 if photo:
                     img_label = ttk.Label(face_container, image=photo, background="#FFFFFF")
