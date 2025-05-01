@@ -69,7 +69,7 @@ class ReportPage(ttk.Frame):
             if current_y_view[1] < 1.0:
                  self.canvas.yview_scroll(1, "units")
 
-    def _load_thumbnail(self, rel_path, size=(150, 150)):
+    def _load_thumbnail(self, abs_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
         # Basic check if the provided path exists
         if not abs_path or not os.path.exists(abs_path): # Check if path is valid
