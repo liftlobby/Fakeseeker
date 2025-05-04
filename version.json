@@ -1,7 +1,7 @@
 {
     "version": "1.2.0",
     "model_filename": "best_model_20250502_204443.pth",
-    "model_url": "",
-    "threshold_url": "",
+    "model_url": "https://github.com/liftlobby/Fakeseeker/releases/download/1.2.0/best_model_20250502_204443.pth",
+    "threshold_url": "https://github.com/liftlobby/Fakeseeker/releases/download/1.2.0/optimal_threshold.json",
     "release_notes": "Model v1.2: Improved accuracy using combined datasets and deeper fine-tuning"
 }
