@@ -1,23 +1,26 @@
 # Getting Started with FakeSeeker (Easy Installation)
 
-Welcome to FakeSeeker! This guide will help you download and run the application on your computer. No technical skills are required!
+Welcome to FakeSeeker! This guide will help you download and run the application on your computer using a direct download link. No technical skills are required!
 
 ## What You Need:
 
-A Windows computer (This guide assumes Windows. Instructions for macOS or Linux may differ slightly).
-
-An internet connection (for the initial download).
+- A Windows computer (This guide assumes Windows. Instructions for macOS or Linux may differ slightly).
+- An internet connection (for the initial download).
 
 ## Steps:
 
 1. Download the Application:
 
 - Click on this link to go to the latest release page:
-[Appication Download](https://github.com/liftlobby/Fakeseeker/releases/tag/1.2.0)
+[Appication Download](https://drive.google.com/file/d/1r0HljX8CgbcKHxverT3ME_L2Mh6zD0qN/view?usp=sharing)
 
-- On the releases page, look for the "Assets" section.
+- Your web browser will open the link. Depending on your Google Drive link settings, you might see a preview or a direct download prompt.
 
-- Download the file named FakeSeeker_vX.Y.Z.zip (the version number X.Y.Z might be different). Click on it to start the download.
+- Look for a "Download" button or icon (often a downward arrow). Click it.
+
+- If prompted, choose a location to save the file. Your browser's "Downloads" folder is the default location.
+
+- The file you download will be named something like FakeSeeker_vX.Y.Z.zip (the version number X.Y.Z might be different). Wait for the download to complete.
 
 2. Extract the Application:
 
@@ -35,8 +38,7 @@ An internet connection (for the initial download).
 
 - Open the FakeSeeker folder that was just created.
 
-- Inside this folder, find the file named FakeSeeker.exe. It might have an icon you designed.
-(Look for a file named "FakeSeeker" with Type "Application")
+- Inside this folder, find the file named FakeSeeker.exe.
 
 - Double-click on FakeSeeker.exe to start the application.
 
@@ -58,7 +60,7 @@ An internet connection (for the initial download).
 
 - View Scan History: See results from previous scans.
 
-- Follow the on-screen instructions for each feature.
+- Click the buttons to explore the different features.
 
 5. Troubleshooting:
 
@@ -69,11 +71,3 @@ An internet connection (for the initial download).
 - Model/Threshold Errors on First Run: The first time you run the app, it might try to download the latest detection model if you have an internet connection. If this fails, you might see an error. Please ensure you are connected to the internet and try restarting the application.
 
 6. Enjoy using FakeSeeker!
-
-Key things to customize:
-
-[[Model](https://github.com/liftlobby/Fakeseeker/releases/tag/1.2.0)]: This is the most critical part. Replace this placeholder with the direct link to the releases page of your GitHub repository. Using /releases/latest usually points to the most recent one.
-
-FakeSeeker_vX.Y.Z.zip: Adjust the filename example to match how you actually name your zipped distribution file on the releases page.
-
-Operating System: If you provide builds for macOS or Linux, create separate, similar instructions mentioning .dmg/.app files for macOS or .tar.gz/AppImage/etc. for Linux and their respective extraction/running methods.
