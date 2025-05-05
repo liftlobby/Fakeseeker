@@ -20,7 +20,7 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 
 - If prompted, choose a location to save the file. Your browser's "Downloads" folder is the default location.
 
-- The file you download will be named something like FakeSeeker_vX.Y.Z.zip (the version number X.Y.Z might be different). Wait for the download to complete.
+- The file you download will be named something like FakeSeeker_vX.Y.Z.zip **(the version number X.Y.Z might be different)**. Wait for the download to complete.
 
 2. Extract the Application:
 
@@ -40,7 +40,7 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 
 - Inside this folder, find the file named FakeSeeker.exe.
 
-- Double-click on FakeSeeker.exe to start the application.
+- Double-click on **FakeSeeker.exe** to start the application.
 
 - Windows Security Note: The first time you run it, Windows Defender SmartScreen might pop up a blue window saying "Windows protected your PC".
 
