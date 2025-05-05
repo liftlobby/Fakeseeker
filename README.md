@@ -12,7 +12,7 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 1. Download the Application:
 
 - Click on this link to go to the latest release page:
-[Appication Download](https://drive.google.com/file/d/1r0HljX8CgbcKHxverT3ME_L2Mh6zD0qN/view?usp=sharing)
+[Application Download](https://drive.google.com/file/d/1r0HljX8CgbcKHxverT3ME_L2Mh6zD0qN/view?usp=sharing)
 
 - Your web browser will open the link. Depending on your Google Drive link settings, you might see a preview or a direct download prompt.
 
@@ -71,3 +71,9 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 - Model/Threshold Errors on First Run: The first time you run the app, it might try to download the latest detection model if you have an internet connection. If this fails, you might see an error. Please ensure you are connected to the internet and try restarting the application.
 
 6. Enjoy using FakeSeeker!
+
+## Acknowledgements
+1. This project utilizes models and code adapted from or inspired by:
+- EfficientNet-PyTorch
+- Facenet-PyTorch
+2. Thanks to the developers of OpenCV, Pillow, MSS, Requests, and Appdirs libraries.
