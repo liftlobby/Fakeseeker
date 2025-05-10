@@ -2,21 +2,32 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import os
-import logging # Import logging
+import logging
+import sys
 
-logger = logging.getLogger(__name__) # Get logger instance
+logger = logging.getLogger(__name__)
 
 class ReportPage(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent) # Correct call to parent __init__
+        # --- Define _report_bg_color at the start of __init__ ---
+        self._report_bg_color = "#F0F0F0" # Default/fallback
+        try:
+            if hasattr(controller, 'style') and controller.style:
+                # Ensure "ReportPage.TFrame" style is configured in main.py with a background
+                self._report_bg_color = controller.style.lookup("ReportPage.TFrame", "background")
+        except tk.TclError:
+            logger.warning("Could not look up ReportPage.TFrame background style, using default #F0F0F0.")
+        
+        super().__init__(parent, style="ReportPage.TFrame") 
         self.controller = controller
-        self.thumbnail_cache = {} # Cache for face thumbnails
+        self.thumbnail_cache = {}
+        self.logger = logger # Using module-level logger
 
-        # --- Basic Layout ---
-        scroll_container = ttk.Frame(self)
+        scroll_container = ttk.Frame(self, style="ReportPage.TFrame")
         scroll_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        self.canvas = tk.Canvas(scroll_container, highlightthickness=0, background="#FFFFFF") # White background
+        # Use the fetched/default color for the canvas
+        self.canvas = tk.Canvas(scroll_container, highlightthickness=0, background=self._report_bg_color) 
         scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scrollbar.set)
 
@@ -24,7 +35,7 @@ class ReportPage(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
 
         # This frame holds the actual content
-        self.scrollable_frame = ttk.Frame(self.canvas, style="WhiteBackground.TFrame") # Use white background style
+        self.scrollable_frame = ttk.Frame(self.canvas, style="ReportPage.TFrame")
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
         # Bind events for layout updates
@@ -35,45 +46,63 @@ class ReportPage(ttk.Frame):
         self.canvas.bind_all("<Button-4>", self._on_mousewheel)    # Linux scroll up
         self.canvas.bind_all("<Button-5>", self._on_mousewheel)   # Linux scroll down
 
+        self.scrollable_frame.bind("<Enter>", self._bind_mousewheel_globally)
+        self.scrollable_frame.bind("<Leave>", self._unbind_mousewheel_globally)
+
+    def _bind_mousewheel_globally(self, event):
+        """Bind mousewheel events globally when mouse enters the scrollable area."""
+        # Using bind_all ensures that the canvas's _on_mousewheel gets the event
+        # even if another widget within scrollable_frame has focus.
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_mousewheel_globally(self, event):
+        """Unbind global mousewheel events when mouse leaves the scrollable area."""
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
     def on_show(self):
         """Called when the page is raised."""
-        # Reset scroll position to top
         self.canvas.yview_moveto(0)
 
     def on_hide(self):
-         """Called when switching away from the page (if needed)."""
-         # No specific action needed currently
-         pass
+        """Called when switching away from the page (if needed)."""
+        # No specific action needed currently
+        pass
 
     def _on_frame_configure(self, event=None):
-        """Updates the scroll region when the inner frame size changes."""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
-        """Adjusts the inner frame width to match the canvas width."""
         self.canvas.itemconfig(self.canvas_window, width=event.width)
 
     def _on_mousewheel(self, event):
-        """Handle mouse wheel scrolling, preventing scrolling past top."""
-        scroll_up = (event.num == 4 or event.delta > 0)
-        scroll_down = (event.num == 5 or event.delta < 0)
+        # Determine scroll direction and amount (same as HistoryPage)
+        if sys.platform.startswith('linux'):
+            if event.num == 4: scroll_val = -1
+            elif event.num == 5: scroll_val = 1
+            else: return
+        elif sys.platform == 'darwin':
+            scroll_val = -1 * event.delta
+        else:
+            if event.delta == 0: return
+            scroll_val = -1 * (event.delta // 120)
 
-        # Get current view BEFORE scrolling
         current_y_view = self.canvas.yview()
-
-        if scroll_up:
-            if current_y_view[0] > 0.0:
-                self.canvas.yview_scroll(-1, "units")
-        elif scroll_down:
-            # Check if not already at the bottom (optional, but good practice)
-            if current_y_view[1] < 1.0:
-                 self.canvas.yview_scroll(1, "units")
+        if scroll_val < 0: # Scrolling up
+            if current_y_view[0] > 0.0001:
+                self.canvas.yview_scroll(scroll_val, "units")
+        elif scroll_val > 0: # Scrolling down
+            if current_y_view[1] < 0.9999:
+                 self.canvas.yview_scroll(scroll_val, "units")
 
     def _load_thumbnail(self, abs_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
         # Basic check if the provided path exists
         if not abs_path or not os.path.exists(abs_path): # Check if path is valid
-            logger.warning(f"Thumbnail absolute path not found or invalid: {abs_path}")
+            logger.warning(f"ReportPage: Thumbnail absolute path not found or invalid: {abs_path}")
             return None
 
         cache_key = (abs_path, size)
@@ -97,142 +126,122 @@ class ReportPage(ttk.Frame):
             return None
 
     def display_report(self, scan_data):
-        """Clears and rebuilds the report display."""
-        # Clear previous content FIRST
+        logger.debug("REPORT_PAGE - Displaying report for scan_data:")
+        logger.debug(f"  Timestamp: {scan_data.get('timestamp')}")
+        logger.debug(f"  Type: {scan_data.get('detection_type')}")
+        logger.debug(f"  Num Results: {len(scan_data.get('results', []))}")
+        logger.debug(f"  Num Thumbnails: {len(scan_data.get('face_thumbnails', []))}")
+        logger.debug(f"  First 5 results: {scan_data.get('results', [])[:5]}")
+        logger.debug(f"  First 5 thumbnails: {scan_data.get('face_thumbnails', [])[:5]}")
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
-        self.thumbnail_cache = {} # Clear cache for new report
-
-        # --- Create the main content frame INSIDE scrollable_frame ---
-        content_frame = ttk.Frame(self.scrollable_frame, padding="15", style="WhiteBackground.TFrame")
-        # Use grid for better control within scrollable_frame if needed later, but pack is fine for single column
+        self.thumbnail_cache = {}
+        
+        effective_bg_color = self._report_bg_color # Use the color determined in __init__
+        content_frame = ttk.Frame(self.scrollable_frame, padding="15", style="ReportContent.TFrame")
         content_frame.pack(fill=tk.BOTH, expand=True)
-        # Make the content frame's column stretch if using grid later
-        # content_frame.grid_columnconfigure(0, weight=1)
 
-        # --- Header (Parent is content_frame) ---
+        # Header
         header = ttk.Label(content_frame, text="Detailed Scan Report",
-                           style='Header.TLabel', background="#FFFFFF", anchor=tk.CENTER)
+                           style='Header.TLabel', background=effective_bg_color, anchor=tk.CENTER)
         header.pack(pady=15, fill=tk.X)
 
-        # --- Results Summary Frame (Parent is content_frame) ---
-        results_outer_frame = ttk.LabelFrame(content_frame, text="Detection Summary", padding="15", style="White.TLabelframe")
+        # Results Summary Frame
+        results_outer_frame = ttk.LabelFrame(content_frame, text="Detection Summary", padding="15", style="ReportSection.TLabelframe")
         results_outer_frame.pack(fill=tk.X, padx=20, pady=10)
 
-        # Calculate average probability (using 'results' list)
-        # 'results' holds individual probs for 'scanned', avg prob for 'summary'
         results_list = scan_data.get('results', [])
-        valid_results = [r for r in results_list if isinstance(r, (float, int))] # Ensure numeric and not None
-
-        avg_prob = 0.0
-        num_valid = len(valid_results)
-        if num_valid > 0:
-            avg_prob = sum(valid_results) / num_valid
-
+        valid_results = [r for r in results_list if isinstance(r, (float, int))]
+        avg_prob = sum(valid_results) / len(valid_results) if valid_results else 0.0
         threshold = self.controller.detector.optimal_threshold
         is_fake = avg_prob >= threshold
         status = "⚠ Potential Deepfake" if is_fake else "✅ Likely Real"
-        status_style = "StatusFake.TLabel" if is_fake else "StatusReal.TLabel"
-
+        status_style_name = "StatusFake.TLabel" if is_fake else "StatusReal.TLabel"
+        
         ttk.Label(results_outer_frame, text=f"Overall Status: {status}",
-                  style=status_style, background="#FFFFFF").pack(pady=5)
+                  style=status_style_name, background=effective_bg_color).pack(pady=5)
         avg_conf_percent = avg_prob * 100
         ttk.Label(results_outer_frame, text=f"Average Fake Probability: {avg_conf_percent:.2f}% (Threshold: {threshold*100:.2f}%)",
-                  style="Detail.TLabel", background="#FFFFFF").pack(pady=5)
-        if num_valid != len(results_list):
-             failed_count = len(results_list) - num_valid
+                  style="Detail.TLabel", background=effective_bg_color).pack(pady=5)
+        if len(valid_results) != len(results_list):
+             failed_count = len(results_list) - len(valid_results)
              ttk.Label(results_outer_frame, text=f"({failed_count} face(s) failed analysis)",
-                       style="Detail.TLabel", background="#FFFFFF", foreground="grey").pack(pady=2)
+                       style="Detail.TLabel", background=effective_bg_color, foreground="grey").pack(pady=2)
 
-
-        # --- File Details (Parent is content_frame) ---
-        detection_type = scan_data.get("detection_type", "scanned") # Get type early
+        # File Details
+        detection_type = scan_data.get("detection_type", "scanned")
         if detection_type == 'scanned' and 'file_path' in scan_data and scan_data['file_path']:
-            details_frame = ttk.LabelFrame(content_frame, text="File Details", padding="15", style="White.TLabelframe")
+            details_frame = ttk.LabelFrame(content_frame, text="File Details", padding="15", style="ReportSection.TLabelframe")
             details_frame.pack(fill=tk.X, padx=20, pady=10)
             try:
                 file_details = self.controller.get_file_details(scan_data['file_path'])
                 for key, value in file_details.items():
-                    detail_label = ttk.Label(details_frame, text=f"{key.capitalize()}: {value}",
-                                            style="Detail.TLabel", background="#FFFFFF")
-                    detail_label.pack(anchor="w", padx=10, pady=2)
+                    ttk.Label(details_frame, text=f"{key.capitalize()}: {value}",
+                              style="Detail.TLabel", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
             except Exception as e:
                 logger.error(f"Error getting file details in report: {e}", exc_info=True)
-                ttk.Label(details_frame, text="Error getting file details.", foreground="red", background="#FFFFFF").pack(anchor="w", padx=10, pady=2)
+                ttk.Label(details_frame, text="Error getting file details.", foreground="red", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
 
+        # Real-time Summary Details
+        if detection_type in ["real-time-summary", "real-time-detailed"]:
+            summary_text = "Real-Time Session Info"
+            if detection_type == "real-time-summary" and not scan_data.get('results', []):
+                 summary_text = "Real-Time Session Summary (Overall)"
 
-        # --- Real-time Summary Details (Parent is content_frame) ---
-        if detection_type == "real-time-summary":
-            summary_frame = ttk.LabelFrame(content_frame, text="Real-Time Session Info", padding="15", style="White.TLabelframe")
+            summary_frame = ttk.LabelFrame(content_frame, text=summary_text, padding="15", style="ReportSection.TLabelframe")
             summary_frame.pack(fill=tk.X, padx=20, pady=10)
             summary = scan_data.get("summary", {})
-            # Display specific summary fields cleanly
             ttk.Label(summary_frame, text=f"Overall Session Result: {summary.get('overall_result', 'N/A')}",
-                      style="Detail.TLabel", background="#FFFFFF").pack(anchor="w", padx=10, pady=2)
-            ttk.Label(summary_frame, text=f"Total Faces Analyzed: {summary.get('total_faces_processed', 'N/A')}",
-                      style="Detail.TLabel", background="#FFFFFF").pack(anchor="w", padx=10, pady=2)
-            ttk.Label(summary_frame, text=f"Real Detections: {summary.get('real_detections', 'N/A')}",
-                      style="Detail.TLabel", background="#FFFFFF").pack(anchor="w", padx=10, pady=2)
-            ttk.Label(summary_frame, text=f"Fake Detections: {summary.get('fake_detections', 'N/A')}",
-                      style="Detail.TLabel", background="#FFFFFF").pack(anchor="w", padx=10, pady=2)
-            # Note: Avg Prob already shown in the main summary section above
+                      style="Detail.TLabel", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
+            ttk.Label(summary_frame, text=f"Total Faces Analyzed/Stored: {summary.get('total_faces_processed', 'N/A')}", style="Detail.TLabel", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
+            ttk.Label(summary_frame, text=f"Real Detections (based on stored): {summary.get('real_detections', 'N/A')}", style="Detail.TLabel", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
+            ttk.Label(summary_frame, text=f"Fake Detections (based on stored): {summary.get('fake_detections', 'N/A')}", style="Detail.TLabel", background=effective_bg_color).pack(anchor="w", padx=10, pady=2)
 
-        # --- Detected Faces Frame (Parent is content_frame) ---
-        # Now content_frame is defined before this section
-        if detection_type == "real-time-summary":
-            faces_frame_text = "Session Face Thumbnails"
-        elif detection_type == "scanned":
-            faces_frame_text = "Detected Faces Analysis"
-        else: # Handle old 'real-time' logs or unknown
-            faces_frame_text = f"Detected Faces ({detection_type})"
+        # Detected Faces Frame
+        if detection_type == "real-time-detailed": faces_frame_text = "Detected Faces (Real-Time - Individual Results)"
+        elif detection_type == "scanned": faces_frame_text = "Detected Faces Analysis (Individual Results)"
+        elif detection_type == "real-time-summary": faces_frame_text = "Session Face Samples (No Individual Results)"
+        else: faces_frame_text = f"Detected Faces ({detection_type})"
 
-        faces_frame = ttk.LabelFrame(content_frame, text=faces_frame_text, style="White.TLabelframe", padding="10")
+        faces_frame = ttk.LabelFrame(content_frame, text=faces_frame_text, padding="10", style="ReportSection.TLabelframe")
         faces_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-
-        grid_frame = ttk.Frame(faces_frame, style="WhiteBackground.TFrame")
-        grid_frame.pack(pady=5) # Center the grid frame
+        
+        grid_frame = ttk.Frame(faces_frame, style="ReportContent.TFrame") # Use the style
+        grid_frame.pack(pady=5)
 
         face_thumbnails = scan_data.get('face_thumbnails', [])
-
+        # results_list was already fetched for the summary section
+        
         if not face_thumbnails:
-            ttk.Label(grid_frame, text="No face thumbnails available.", style='Detail.TLabel', background="#FFFFFF").pack()
+            ttk.Label(grid_frame, text="No face thumbnails available.", style='Detail.TLabel', background=effective_bg_color).pack()
         else:
-            max_cols = 4 # Faces per row
+            max_cols = 4
             for i, abs_path in enumerate(face_thumbnails):
-                row_idx = i // max_cols
-                col_idx = i % max_cols
-                face_container = ttk.Frame(grid_frame, padding=5, style="WhiteBackground.TFrame")
+                row_idx, col_idx = i // max_cols, i % max_cols
+                face_container = ttk.Frame(grid_frame, padding=5, style="ReportContent.TFrame") # Use style
                 face_container.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky="n")
-
                 photo = self._load_thumbnail(abs_path, size=(120, 120))
-
                 if photo:
-                    img_label = ttk.Label(face_container, image=photo, background="#FFFFFF")
+                    img_label = ttk.Label(face_container, image=photo) # No explicit bg needed if parent has style
                     img_label.image = photo
                     img_label.pack(pady=2)
-
-                    # Show Probability ONLY for 'scanned' type where results list matches thumbnails
-                    if detection_type == 'scanned' and i < len(results_list):
+                    
+                    # --- CRITICAL LOGIC FOR DISPLAYING INDIVIDUAL RESULTS ---
+                    if detection_type in ['scanned', 'real-time-detailed'] and i < len(results_list):
                         prob = results_list[i]
-                        if prob is not None: # Check if prediction was successful for this face
+                        if prob is not None:
+                            # threshold = self.controller.detector.optimal_threshold # Already defined above
                             face_status = "FAKE" if prob >= threshold else "REAL"
                             color = "red" if face_status == "FAKE" else "green"
                             ttk.Label(face_container, text=f"{face_status} ({prob * 100:.1f}%)",
-                                      font=('Helvetica', 10), foreground=color, background="#FFFFFF").pack(pady=1)
+                                      font=('Helvetica', 10), foreground=color, background=effective_bg_color).pack(pady=1)
                         else:
-                            ttk.Label(face_container, text="Analysis Failed",
-                                      font=('Helvetica', 10, 'italic'), background="#FFFFFF", foreground="grey").pack(pady=1)
-                    # No individual probability shown for summary thumbnails
-                    elif detection_type == 'real-time-summary':
-                          # Optionally add a simple counter label
-                          ttk.Label(face_container, text=f"Face #{i+1}", font=('Helvetica', 9, 'italic'), background="#FFFFFF", foreground="grey").pack(pady=1)
+                            ttk.Label(face_container, text="Analysis Failed", font=('Helvetica', 10, 'italic'), background=effective_bg_color, foreground="grey").pack(pady=1)
+                    elif detection_type == 'real-time-summary': # Old type, only show counter
+                          ttk.Label(face_container, text=f"Face #{i+1}", font=('Helvetica', 9, 'italic'), background=effective_bg_color, foreground="grey").pack(pady=1)
+                else:
+                    ttk.Label(face_container, text="[Image N/A]", background=effective_bg_color, foreground="grey").pack(pady=5, ipadx=10, ipady=10)
 
-
-                else: # Thumbnail failed to load
-                    ttk.Label(face_container, text="[Image N/A]", background="#FFFFFF", foreground="grey").pack(pady=5, ipadx=10, ipady=10)
-
-
-        # Update scrollregion after adding ALL content
-        self.scrollable_frame.update_idletasks() # Ensure frame size is calculated
-        self._on_frame_configure() # Update scroll region
-        self.canvas.yview_moveto(0) # Scroll back to top
+        self.scrollable_frame.update_idletasks()
+        self._on_frame_configure()
+        self.canvas.yview_moveto(0)

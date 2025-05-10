@@ -60,6 +60,19 @@ class FakeSeekerApp:
         self.app_author = "ChuaKaiZen_UTHM"
         self.root = root
         self.root.title("FakeSeeker - Deepfake Detection Tool")
+
+        # --- SETTING THE WINDOW ICON ---
+        try:
+            # Use resource_path to find the icon
+            icon_path_for_window = resource_path(os.path.join('images', 'fakeseeker.ico')) # Or fakeseeker_logo.ico
+            if os.path.exists(icon_path_for_window):
+                self.root.iconbitmap(icon_path_for_window)
+                logger.info(f"Window icon set from: {icon_path_for_window}")
+            else:
+                logger.warning(f"Window icon 'fakeseeker.ico' (or logo) not found via resource_path: {icon_path_for_window}")
+        except Exception as e:
+            logger.error(f"Failed to set window icon: {e}", exc_info=True)
+        
         self.root.geometry("1600x900")
         self.root.state("zoomed")
         self.root.resizable(True, True)  # Allow resizing if needed
@@ -216,10 +229,19 @@ class FakeSeekerApp:
         style.configure("StatusReal.TLabel", font=('Helvetica', 16, 'bold'), foreground="#2E8B57") # Larger Status
         style.configure("StatusFake.TLabel", font=('Helvetica', 16, 'bold'), foreground="#DC143C") # Larger Status
         style.configure("TButton", font=('Helvetica', 16), padding=12)
+        style.configure("Toolbar.TButton", font=('Helvetica', 10), padding=5) # Smaller font and padding
         style.configure("Card.TFrame", relief="solid", borderwidth=1)
         style.configure("WhiteBackground.TFrame", background="#FFFFFF")
         style.configure("White.TLabelframe", background="#FFFFFF")
         style.configure("White.TLabelframe.Label", font=('Helvetica', 14, 'bold'), background="#FFFFFF")
+        # for report page
+        report_bg_color = "#F0F0F0"
+        style.configure("ReportPage.TFrame", background=report_bg_color)
+        style.configure("ReportContent.TFrame", background=report_bg_color) # For the content_frame
+        style.configure("ReportSection.TLabelframe", background=report_bg_color)
+        style.configure("ReportSection.TLabelframe.Label", font=('Helvetica', 14, 'bold'), background=report_bg_color)
+        style.configure("Detail.TLabel", font=('Helvetica', 14)) # No background specified, should inherit
+        style.configure("Header.TLabel", font=('Helvetica', 30, 'bold')) # No background, should inherit or be set explicitly
 
         logger.info("Styles configured successfully.")
 
@@ -927,16 +949,15 @@ class FakeSeekerApp:
         if was_detection_active and self.rt_frame_count > 0 and self.rt_results_list:
             logger.info(f"Processing real-time session summary: {len(self.rt_results_list)} results stored.")
             try:
-                all_probs = [item['prob'] for item in self.rt_results_list if 'prob' in item]
+                all_individual_probs = [item['prob'] for item in self.rt_results_list if 'prob' in item]
                 all_thumb_paths = [item['thumb_path'] for item in self.rt_results_list if 'thumb_path' in item]
-                avg_fake_prob = sum(all_probs) / len(all_probs) if all_probs else 0.0
+                avg_fake_prob = sum(all_individual_probs) / len(all_individual_probs) if all_individual_probs else 0.0
                 avg_confidence_percent = avg_fake_prob * 100
-                # --- Store direct label, not "Likely ..." ---
                 overall_result_label = "FAKE" if avg_fake_prob >= self.detector.optimal_threshold else "REAL"
 
-                summary_report = {
+                detailed_report = {
                     "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
-                    "detection_type": "real-time-summary",
+                    "detection_type": "real-time-detailed",
                     "file_path": None,
                     "summary": {
                         "total_faces_processed": self.rt_frame_count,
@@ -944,16 +965,23 @@ class FakeSeekerApp:
                         "fake_detections": self.rt_fake_count,
                         "average_fake_probability": f"{avg_confidence_percent:.2f}%",
                         "overall_result": overall_result_label,
-                        "face_thumbnails": all_thumb_paths
                     },
-                    "results": [avg_fake_prob], # Store avg prob
+                    # Store the *list* of individual probabilities
+                    "results": all_individual_probs,
+                    # Store the corresponding list of thumbnail paths
+                    "face_thumbnails": all_thumb_paths
                 }
-                self.update_scan_history(summary_report)
-                logger.info("Real-time summary saved.")
+                logger.debug(f"STOP_DETECTION - Saving detailed_report:")
+                logger.debug(f"  Timestamp: {detailed_report.get('timestamp')}")
+                logger.debug(f"  Type: {detailed_report.get('detection_type')}")
+                logger.debug(f"  Num Results: {len(detailed_report.get('results', []))}")
+                logger.debug(f"  Num Thumbnails: {len(detailed_report.get('face_thumbnails', []))}")
+                logger.debug(f"  First 5 results: {detailed_report.get('results', [])[:5]}")
+                logger.debug(f"  First 5 thumbnails: {detailed_report.get('face_thumbnails', [])[:5]}")
+                self.update_scan_history(detailed_report) # Save the modified structure
+                logger.info("Real-time session details saved.") # Changed log message
             except Exception as e:
-                logger.error(f"Failed to process or save real-time summary: {e}", exc_info=True)
-        elif was_detection_active:
-            logger.info("Detection stopped, but no results stored during the session. No summary saved.")
+                logger.error(f"Failed to process or save real-time detailed report: {e}", exc_info=True)
 
 
         # --- Reset counters (only if detection was active) ---

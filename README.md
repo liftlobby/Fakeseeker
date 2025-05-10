@@ -6,13 +6,14 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 
 - A Windows computer (This guide assumes Windows. Instructions for macOS or Linux may differ slightly).
 - An internet connection (for the initial download).
+- A tool to extract .7z files, such as 7-Zip (free and recommended) or WinRAR. (Many computers do not have built-in support for .7z files like they do for .zip files.)
 
 ## Steps:
 
 1. Download the Application:
 
-- Click on this link to go to the latest release page:
-[Application Download](https://drive.google.com/file/d/1r0HljX8CgbcKHxverT3ME_L2Mh6zD0qN/view?usp=sharing)
+- Click on this link to download the application file:
+[Application Download](https://drive.google.com/file/d/1UMtDyzLD4PV7QkngxoANNTZ9qqvvDJPO/view?usp=sharing)
 
 - Your web browser will open the link. Depending on your Google Drive link settings, you might see a preview or a direct download prompt.
 
@@ -20,17 +21,17 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 
 - If prompted, choose a location to save the file. Your browser's "Downloads" folder is the default location.
 
-- The file you download will be named something like FakeSeeker_vX.Y.Z.zip **(the version number X.Y.Z might be different)**. Wait for the download to complete.
+- The file you download will be named something like FakeSeeker_vX.Y.Z.7z (the version number X.Y.Z might be different). The download size is under 2GB, so it may take some time depending on your internet speed. Wait for the download to complete.
 
 2. Extract the Application:
 
-- Find the downloaded FakeSeeker_vX.Y.Z.zip file (usually in your "Downloads" folder).
+- Find the downloaded FakeSeeker_vX.Y.Z.7z file (usually in your "Downloads" folder).
 
-- Right-click on the .zip file.
+- Right-click on the .7z file.
 
 - Select "Extract All...".
 
-- A window will pop up asking where to extract the files. Choose a location you'll remember, like your Desktop or Documents folder. It's best not to extract it directly into your Downloads folder. Click "Extract".
+- If you have 7-Zip installed, you should see a "7-Zip" option in the context menu. Hover over it and select "Extract to FakeSeeker_vX.Y.Z\". Alternatively, you can choose "Extract Here" if you prefer the files in the current folder, or "Extract files..." to choose a specific location.
 
 - This will create a new folder named FakeSeeker (or similar) in the location you chose.
 
@@ -64,7 +65,9 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 
 5. Troubleshooting:
 
-- "App Didn't Start": Make sure you extracted the entire FakeSeeker folder from the .zip file and are running the .exe from inside that extracted folder. Don't just pull the .exe out by itself.
+- "App Didn't Start": Make sure you extracted the entire FakeSeeker folder from the .7z file and are running the .exe from inside that extracted folder. Don't just pull the .exe out by itself or run it directly from within the archive viewer.
+
+- Cannot Open .7z File: If you cannot open the downloaded file, you likely need to install an extraction tool like 7-Zip (free).
 
 - Antivirus Warning: Some antivirus programs might flag the .exe because it's a newly created application. This is often a false positive. If you trust the source, you may need to temporarily disable your antivirus or add an exception for FakeSeeker.exe. Proceed with caution if you are unsure.
 

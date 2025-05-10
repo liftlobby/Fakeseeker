@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from efficientnet_pytorch import EfficientNet
+import torch.nn.functional as F
 
 # Data processing
 from PIL import Image, UnidentifiedImageError
@@ -23,6 +24,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
+from sklearn.metrics import precision_recall_curve, average_precision_score, balanced_accuracy_score
 
 # Standard Libraries
 import argparse
@@ -58,6 +60,51 @@ def setup_logging(log_dir="logs", run_timestamp=""):
 def get_logger(name):
     """Gets a logger instance."""
     return logging.getLogger(name)
+
+# --- Focal Loss Implementation ---
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean', num_classes=2):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+        self.num_classes = num_classes
+
+        # Handle alpha
+        if isinstance(alpha, (float, int)): # Single alpha for positive class in binary, or balanced for multi-class
+            if self.num_classes == 2: # Binary case: alpha for class 1, (1-alpha) for class 0
+                 # This assumes target 1 is the "positive" or focal class
+                self.alpha = torch.tensor([1 - alpha, alpha], dtype=torch.float32)
+            else: # Multi-class: apply alpha as a general weight, or assume balanced if single float
+                self.alpha = torch.tensor([alpha] * self.num_classes, dtype=torch.float32)
+        elif isinstance(alpha, (list, tuple, np.ndarray, torch.Tensor)):
+            if len(alpha) != self.num_classes:
+                raise ValueError(f"Alpha must be a float or a list/tensor of length num_classes ({self.num_classes})")
+            self.alpha = torch.tensor(alpha, dtype=torch.float32)
+        else:
+            raise TypeError("Alpha must be float, list, tuple, np.ndarray, or torch.Tensor")
+
+    def forward(self, inputs, targets):
+        # inputs: (batch_size, num_classes) - raw logits
+        # targets: (batch_size) - long type
+        
+        # Ensure alpha is on the same device as inputs
+        if self.alpha.device != inputs.device:
+            self.alpha = self.alpha.to(inputs.device)
+
+        CE_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-CE_loss) # Probabilities of the true class
+        
+        # Select alpha for each sample based on its true class
+        alpha_t = self.alpha.gather(0, targets.data.view(-1))
+        
+        F_loss = alpha_t * (1 - pt)**self.gamma * CE_loss
+
+        if self.reduction == 'mean':
+            return torch.mean(F_loss)
+        elif self.reduction == 'sum':
+            return torch.sum(F_loss)
+        else: # 'none'
+            return F_loss
 
 class FaceExtractor:
     def __init__(self, device='cuda', config=None): # Accept config
@@ -198,24 +245,36 @@ class DeepfakeDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
+        image_path = self.image_paths[idx] # Get the path
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         try:
-            # Check if path is valid before opening
             if not os.path.exists(image_path):
-                raise FileNotFoundError(f"Image file not found at index {idx}: {image_path}")
+                self.logger.error(f"Image file not found at index {idx}: {image_path}. Returning placeholder.")
+                ph_size = 224
+                if self.transform and hasattr(self.transform, 'transforms'):
+                    for t in self.transform.transforms:
+                        if isinstance(t, (transforms.Resize, transforms.CenterCrop)):
+                            ph_size = t.size if isinstance(t.size, int) else t.size[0]; break
+                placeholder_img = torch.zeros((3, ph_size, ph_size))
+                # Return placeholder, error label, AND the problematic path
+                return placeholder_img, torch.tensor(-1, dtype=torch.long), image_path # MODIFIED RETURN
+
             image = Image.open(image_path).convert('RGB')
             if self.transform:
                 image = self.transform(image)
-            return image, label
+            # Return image tensor, label tensor, AND the original path string
+            return image, label, image_path # MODIFIED RETURN
+
         except Exception as e:
-            # Log error with more context and return a placeholder
-            self.logger.error(f"Error loading item at index {idx}, path '{image_path}': {e}", exc_info=True)
-            # Return placeholder - Ensure shape matches transformed output
-            # Assuming transform outputs [C, H, W] like [3, 260, 260]
-            placeholder_img = torch.zeros((3, self.transform.transforms[0].size[0], self.transform.transforms[0].size[1])) if self.transform else torch.zeros((3, 224, 224))
-            placeholder_label = torch.tensor(-1, dtype=torch.long) # Use -1 to indicate error? Or keep 0?
-            return placeholder_img, placeholder_label # Must return tensors of expected type
+            self.logger.error(f"Error loading item at index {idx}, path '{image_path}': {e}. Returning placeholder.", exc_info=True)
+            ph_size = 224
+            if self.transform and hasattr(self.transform, 'transforms'):
+                for t in self.transform.transforms:
+                    if isinstance(t, (transforms.Resize, transforms.CenterCrop)):
+                        ph_size = t.size if isinstance(t.size, int) else t.size[0]; break
+            placeholder_img = torch.zeros((3, ph_size, ph_size))
+            # Return placeholder, error label, AND the problematic path
+            return placeholder_img, torch.tensor(-1, dtype=torch.long), image_path
 
 class DeepfakeTrainer:
     def __init__(self, config):
@@ -268,6 +327,16 @@ class DeepfakeTrainer:
         self.logger.info(f"  Classifier LR: {lr * classifier_lr_mult}")
 
         # --- Initialize Scheduler ---
+        if self.config.get('use_focal_loss', False):
+            self.logger.info("Using Focal Loss.")
+            focal_alpha = self.config.get('focal_loss_alpha', 0.25) # Can be float or list
+            self.criterion = FocalLoss(
+                alpha=focal_alpha, # Pass directly, FocalLoss class handles interpretation
+                gamma=self.config.get('focal_loss_gamma', 2.0),
+                num_classes=2 # Assuming binary classification
+            )
+        else:
+            self.logger.info("Using CrossEntropyLoss.")
         self.criterion = nn.CrossEntropyLoss()
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.1, patience=self.config.get('scheduler_patience', 5), verbose=True
@@ -289,32 +358,31 @@ class DeepfakeTrainer:
         self.logger.info(f"Building model: {self.config['model_version']} with image size {self.config['image_size']}")
         try:
             model = EfficientNet.from_pretrained(self.config['model_version'], num_classes=2)
-            # --- Unfreeze Layers ---
-            unfreeze_blocks = self.config.get('unfreeze_blocks', 3) # Configurable: How many blocks from the end to unfreeze
+            unfreeze_blocks_count = self.config.get('unfreeze_blocks', 3)
             total_blocks = len(model._blocks)
-            if unfreeze_blocks > 0:
-                self.logger.info(f"Unfreezing the last {unfreeze_blocks} blocks of EfficientNet.")
-                # Unfreeze classifier layer first (always trainable)
-                for param in model._fc.parameters():
-                    param.requires_grad = True
-                # Unfreeze specified number of blocks from the end
-                for i in range(total_blocks - unfreeze_blocks, total_blocks):
-                    self.logger.debug(f"Unfreezing Block {i}")
+
+            # Default: Freeze all, then selectively unfreeze
+            for param in model.parameters():
+                param.requires_grad = False
+            
+            # Always make classifier trainable
+            for param in model._fc.parameters():
+                param.requires_grad = True
+            
+            if unfreeze_blocks_count > 0: # Unfreeze last N blocks + head
+                self.logger.info(f"Unfreezing the last {unfreeze_blocks_count} blocks, _conv_head, and _bn1.")
+                for i in range(total_blocks - unfreeze_blocks_count, total_blocks):
                     for param in model._blocks[i].parameters():
                         param.requires_grad = True
-                # Make sure the final conv head and batch norm are also trainable
-                for param in model._conv_head.parameters():
-                    param.requires_grad = True
-                for param in model._bn1.parameters():
-                    param.requires_grad = True
-            else:
-                self.logger.info("Fine-tuning only the final classifier layer.")
-                # Freeze everything except the final layer
-                for param in model.parameters():
-                    param.requires_grad = False
-                for param in model._fc.parameters():
-                    param.requires_grad = True
-            # --- End Unfreeze ---
+                if hasattr(model, '_conv_head'):
+                    for param in model._conv_head.parameters():
+                        param.requires_grad = True
+                if hasattr(model, '_bn1'):
+                    for param in model._bn1.parameters():
+                        param.requires_grad = True
+            else: # Only classifier is trainable (already handled by fc unfreeze)
+                self.logger.info("Fine-tuning only the final classifier layer (_fc).")
+            
             model = model.to(self.device)
             return model
         except Exception as e:
@@ -438,78 +506,95 @@ class DeepfakeTrainer:
     def _monitor_class_distribution(self, loader, name='Loader'):
         """Monitors class distribution within a DataLoader."""
         counts = {}
-        total = 0
+        total_samples_in_loader = 0
+        # For efficiency, only check a few batches or up to a certain number of samples
+        max_samples_to_check = 5000 if 'Train' in name else float('inf') # Limit for training loader
+        
         for _, batch_labels in loader:
             for label_val in batch_labels.numpy():
+                if label_val == -1: continue # Skip error labels
                 counts[label_val] = counts.get(label_val, 0) + 1
-                total += 1
-        if total == 0:
-            self.logger.warning(f"Cannot monitor distribution for {name}: Loader is empty.")
+                total_samples_in_loader += 1
+            if total_samples_in_loader >= max_samples_to_check and 'Train' in name : break
+        
+        if total_samples_in_loader == 0:
+            self.logger.warning(f"Cannot monitor distribution for {name}: Loader is effectively empty or all error labels.")
             return
-
-        self.logger.info(f"Class distribution in {name} (approx first few batches if large):")
-        for label, count in sorted(counts.items()):
-            self.logger.info(f"  Class {label}: {count} ({count/total:.1%})")
+        
+        self.logger.info(f"Class distribution in {name} (checked ~{total_samples_in_loader} samples):")
+        for label_val, count in sorted(counts.items()):
+            self.logger.info(f"  Class {label_val}: {count} ({count/total_samples_in_loader:.2%})")
 
     def train_epoch(self):
         """Trains the model for one epoch."""
         self.model.train()
-        total_loss, correct, total = 0, 0, 0
+        total_loss, correct, total_samples_processed = 0, 0, 0 # Renamed 'total' for clarity
+        
+        accumulation_steps = self.config.get('gradient_accumulation_steps', 1)
+        if self.optimizer.param_groups[0]['params']: # Check if there are params to optimize before zero_grad
+             self.optimizer.zero_grad()
+
         progress_bar = tqdm(self.train_loader, desc=f'Epoch {self.current_epoch}/{self.config["epochs"]} [Train]', unit='batch')
 
-        for inputs, labels in progress_bar:
-            # Skip batches with error labels (if dataset returns -1)
-            valid_indices = labels != -1
-            if not valid_indices.any(): continue # Skip if whole batch is invalid
+        for i, (inputs, labels) in enumerate(progress_bar):
+            valid_indices = labels != -1 # Filter out error labels from dataset
+            if not valid_indices.any():
+                self.logger.debug(f"Skipping batch {i} in train_epoch due to all error labels.")
+                continue
             inputs, labels = inputs[valid_indices], labels[valid_indices]
-
             inputs, labels = inputs.to(self.device), labels.to(self.device)
 
-            self.optimizer.zero_grad()
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
-            loss.backward()
-            # Optional: Gradient Clipping
-            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
+            loss_scaled = loss / accumulation_steps
+            loss_scaled.backward()
 
-            total_loss += loss.item() * inputs.size(0) # Weighted average loss
+            if (i + 1) % accumulation_steps == 0 or (i + 1) == len(self.train_loader):
+                if self.config.get('clip_grad_norm', False): # Add config for this
+                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config.get('grad_norm_max',1.0))
+                if self.optimizer.param_groups[0]['params']: # Check again before step
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+            
+            total_loss += loss.item() * inputs.size(0) # Use unscaled loss for total_loss accumulation
             _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
+            total_samples_processed += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-            progress_bar.set_postfix(loss=f"{total_loss/total:.4f}", acc=f"{100.*correct/total:.2f}%")
-
-        epoch_loss = total_loss / total if total > 0 else 0
-        epoch_acc = correct / total if total > 0 else 0
+            if total_samples_processed > 0:
+                current_avg_loss = total_loss / total_samples_processed
+                current_avg_acc = correct / total_samples_processed
+                progress_bar.set_postfix(loss=f"{current_avg_loss:.4f}", acc=f"{100.*current_avg_acc:.2f}%")
+        
+        epoch_loss = total_loss / total_samples_processed if total_samples_processed > 0 else 0
+        epoch_acc = correct / total_samples_processed if total_samples_processed > 0 else 0
         return epoch_loss, epoch_acc
         
     def validate(self):
         """Validates the model."""
         self.model.eval()
-        total_loss, correct, total = 0, 0, 0
+        total_loss, correct, total_samples_processed = 0, 0, 0
         progress_bar = tqdm(self.val_loader, desc=f'Epoch {self.current_epoch}/{self.config["epochs"]} [Val]', unit='batch')
-
         with torch.no_grad():
             for inputs, labels in progress_bar:
-                 # Skip batches with error labels
                 valid_indices = labels != -1
-                if not valid_indices.any(): continue
+                if not valid_indices.any():
+                    self.logger.debug("Skipping batch in validate due to all error labels.")
+                    continue
                 inputs, labels = inputs[valid_indices], labels[valid_indices]
-
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
+
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
-
                 total_loss += loss.item() * inputs.size(0)
                 _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
+                total_samples_processed += labels.size(0)
                 correct += (predicted == labels).sum().item()
-
-                progress_bar.set_postfix(loss=f"{total_loss/total:.4f}", acc=f"{100.*correct/total:.2f}%")
-
-        epoch_loss = total_loss / total if total > 0 else 0
-        epoch_acc = correct / total if total > 0 else 0
+                if total_samples_processed > 0:
+                    progress_bar.set_postfix(loss=f"{total_loss/total_samples_processed:.4f}", acc=f"{100.*correct/total_samples_processed:.2f}%")
+        
+        epoch_loss = total_loss / total_samples_processed if total_samples_processed > 0 else 0
+        epoch_acc = correct / total_samples_processed if total_samples_processed > 0 else 0
         return epoch_loss, epoch_acc
 
     def train(self):
@@ -560,16 +645,17 @@ class DeepfakeTrainer:
         self.logger.info("Loading best model for final evaluation...")
         best_model_path = os.path.join(self.run_dir, f'best_model_{self.timestamp}.pth')
         if os.path.exists(best_model_path):
-            checkpoint = torch.load(best_model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.logger.info("Best model loaded.")
-            optimal_threshold, roc_auc = self.evaluate_model() # Evaluate the best model
-            # Generate plots for the best model's predictions
-            self.generate_evaluation_plots(optimal_threshold)
+            try:
+                checkpoint = torch.load(best_model_path, map_location=self.device)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.logger.info("Best model loaded.")
+            except Exception as e:
+                self.logger.error(f"Failed to load best model state_dict from {best_model_path}: {e}. Evaluating final model instead.")
         else:
-            self.logger.warning("Best model checkpoint not found. Evaluating final model instead.")
-            optimal_threshold, roc_auc = self.evaluate_model() # Evaluate the final model
-            self.generate_evaluation_plots(optimal_threshold) # Plots based on final model
+            self.logger.warning(f"Best model checkpoint not found at {best_model_path}. Evaluating final model instead.")
+        
+        optimal_threshold= self.evaluate_model() # Evaluate best or final model
+        self.generate_evaluation_plots(optimal_threshold)
 
     def save_model(self, filename_base):
         """Saves model checkpoint."""
@@ -588,7 +674,7 @@ class DeepfakeTrainer:
             torch.save(state, save_path)
             self.logger.info(f"Model checkpoint saved to {save_path}")
         except Exception as e:
-             self.logger.error(f"Failed to save model {filename}: {e}", exc_info=True)
+            self.logger.error(f"Failed to save model {filename}: {e}", exc_info=True)
 
     def save_history(self):
         """Saves training history dict to JSON."""
@@ -599,14 +685,14 @@ class DeepfakeTrainer:
                 serializable_history = {}
                 for key, value_list in self.history.items():
                     if isinstance(value_list, list):
-                         serializable_history[key] = [float(v) if isinstance(v, (np.float32, np.float64)) else v for v in value_list]
+                        serializable_history[key] = [float(v) if isinstance(v, (np.float32, np.float64)) else v for v in value_list]
                     else: # Handle single values like best_val_loss
-                         serializable_history[key] = float(value_list) if isinstance(value_list, (np.float32, np.float64)) else value_list
+                        serializable_history[key] = float(value_list) if isinstance(value_list, (np.float32, np.float64)) else value_list
 
                 json.dump(serializable_history, f, indent=4)
             self.logger.info(f"Training history saved to {history_path}")
         except Exception as e:
-             self.logger.error(f"Failed to save history: {e}", exc_info=True)
+            self.logger.error(f"Failed to save history: {e}", exc_info=True)
 
     def plot_history(self):
         """Plots training and validation loss and accuracy."""
@@ -646,52 +732,108 @@ class DeepfakeTrainer:
         self.logger.info("Evaluating model on validation set...")
         self.model.eval()
         all_probs_fake = []
-        all_labels = []
+        all_labels_eval = [] # Use a different name to avoid clash if called multiple times
+        image_paths_eval = [] # For saving predictions with paths
+
+        # Assuming val_loader is available from self.prepare_data()
+        if not hasattr(self, 'val_loader') or self.val_loader is None:
+            self.logger.error("Validation loader not found. Cannot evaluate model.")
+            return 0.5, 0.0 # Default values
 
         with torch.no_grad():
-            for inputs, labels in tqdm(self.val_loader, desc='Evaluating', unit='batch'):
-                valid_indices = labels != -1
-                if not valid_indices.any(): continue
-                inputs, labels = inputs[valid_indices], labels[valid_indices]
+            for inputs, labels_batch, paths_batch in tqdm(self.val_loader, desc='Evaluating', unit='batch'):
 
-                inputs = inputs.to(self.device)
-                outputs = self.model(inputs)
-                probabilities = torch.softmax(outputs, dim=1)[:, 1] # Probability of class 1 (Fake)
+                valid_indices = labels_batch != -1
+                if not valid_indices.any(): continue # Skip if all labels are -1 (errors)
+
+                # --- MODIFIED: Filter paths along with inputs/labels ---
+                # Note: paths_batch is likely a TUPLE of strings from the DataLoader's default collate function
+                inputs_filt, labels_filt = inputs[valid_indices], labels_batch[valid_indices]
+                # Filter the paths tuple using the boolean mask
+                paths_filt = [path for path, valid in zip(paths_batch, valid_indices) if valid]
+
+                inputs_filt = inputs_filt.to(self.device)
+                outputs = self.model(inputs_filt)
+                probabilities = torch.softmax(outputs, dim=1)[:, 1] # Prob of class 1 (Fake)
 
                 all_probs_fake.extend(probabilities.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
+                all_labels_eval.extend(labels_filt.cpu().numpy())
+                image_paths_eval.extend(paths_filt) # <--- Collect the filtered paths
 
-        all_labels = np.array(all_labels)
-        all_probs_fake = np.array(all_probs_fake)
+        all_labels_eval_np = np.array(all_labels_eval)
+        all_probs_fake_np = np.array(all_probs_fake)
 
-        if len(np.unique(all_labels)) < 2:
-             self.logger.warning("Evaluation dataset contains only one class. Cannot compute ROC/AUC or optimal threshold.")
-             # Save default threshold
-             with open("optimal_threshold.json", "w") as f: json.dump({"optimal_threshold": 0.5}, f)
-             return 0.5, 0.0 # Default values
+        if len(all_labels_eval_np) == 0 or len(np.unique(all_labels_eval_np)) < 2 :
+            self.logger.warning("Validation dataset is empty or contains only one class after filtering. Cannot compute ROC/AUC or optimal threshold.")
+            optimal_threshold = 0.5
+            roc_auc_val = 0.0
+            if os.path.exists("optimal_threshold.json"): # Avoid overwriting if file exists from a previous valid run
+                 try:
+                     with open("optimal_threshold.json", "r") as f_in:
+                         data = json.load(f_in)
+                         optimal_threshold = data.get("optimal_threshold", 0.5)
+                     self.logger.info(f"Using existing optimal_threshold.json value: {optimal_threshold}")
+                 except: pass # Stick to 0.5 if file is corrupt
+            else:
+                with open("optimal_threshold.json", "w") as f_out: json.dump({"optimal_threshold": optimal_threshold}, f_out)
 
-        fpr, tpr, thresholds = roc_curve(all_labels, all_probs_fake)
-        roc_auc = auc(fpr, tpr)
-        self.logger.info(f"Validation ROC AUC: {roc_auc:.4f}")
+            return optimal_threshold
 
-        # Find optimal threshold (Youden's J)
-        optimal_idx = np.argmax(tpr - fpr)
-        optimal_threshold = thresholds[optimal_idx]
-        # Handle edge case where threshold might be > 1 or < 0 due to floating point issues
-        optimal_threshold = max(0.0, min(1.0, float(optimal_threshold)))
-        self.logger.info(f"Calculated optimal threshold: {optimal_threshold:.6f}")
+        fpr, tpr, thresholds_roc = roc_curve(all_labels_eval_np, all_probs_fake_np)
+        roc_auc_val = auc(fpr, tpr)
+        self.logger.info(f"Validation ROC AUC: {roc_auc_val:.4f}")
 
+        optimal_idx = np.argmax(tpr - fpr) # Youden's J statistic
+        optimal_threshold = float(thresholds_roc[optimal_idx])
+        optimal_threshold = max(0.0, min(1.0, optimal_threshold)) # Clamp
+        self.logger.info(f"Calculated optimal threshold (Youden's J): {optimal_threshold:.6f}")
 
-        # --- Save Optimal Threshold ---
-        threshold_data = {"optimal_threshold": optimal_threshold}
-        # Save to current directory (for detector app) and run directory (for record)
+        # --- Save Raw Predictions ---
         try:
-            with open("optimal_threshold.json", "w") as f:
-                json.dump(threshold_data, f, indent=4)
+            df_preds_data = {'true_label': all_labels_eval_np, 'predicted_probability_fake': all_probs_fake_np}
+            # if image_paths_eval: df_preds_data['image_path'] = image_paths_eval # Add if available
+            df_preds = pd.DataFrame(df_preds_data)
+            preds_save_path = os.path.join(self.run_dir, f'validation_predictions_{self.timestamp}.csv')
+            df_preds.to_csv(preds_save_path, index=False)
+            self.logger.info(f"Validation predictions and probabilities saved to {preds_save_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to save validation predictions: {e}", exc_info=True)
+
+        predictions_at_optimal = (all_probs_fake_np >= optimal_threshold).astype(int)
+        bal_acc = balanced_accuracy_score(all_labels_eval_np, predictions_at_optimal)
+        self.logger.info(f"Validation Balanced Accuracy (at optimal threshold {optimal_threshold:.3f}): {bal_acc:.4f}")
+        
+        cm_eval = confusion_matrix(all_labels_eval_np, predictions_at_optimal)
+        if cm_eval.shape == (2,2): # Ensure it's a 2x2 matrix for binary
+            tn, fp, fn, tp = cm_eval.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            self.logger.info(f"Validation Specificity (at optimal threshold): {specificity:.4f}")
+        else:
+            self.logger.warning("Confusion matrix not 2x2, cannot calculate specificity easily.")
+
+        precision_pr, recall_pr, _ = precision_recall_curve(all_labels_eval_np, all_probs_fake_np)
+        avg_precision = average_precision_score(all_labels_eval_np, all_probs_fake_np)
+        self.logger.info(f"Validation Average Precision (PR AUC): {avg_precision:.4f}")
+
+        # Plot Precision-Recall Curve
+        try:
+            plt.figure(figsize=(8, 6))
+            plt.plot(recall_pr, precision_pr, color='blue', lw=2, label=f'PR curve (AP = {avg_precision:.4f})')
+            plt.xlabel('Recall'); plt.ylabel('Precision'); plt.title('Precision-Recall Curve'); plt.legend(loc="lower left"); plt.grid(True)
+            pr_curve_path = os.path.join(self.run_dir, f'precision_recall_curve_{self.timestamp}.png')
+            plt.savefig(pr_curve_path); plt.close()
+            self.logger.info(f"Precision-Recall curve saved to {pr_curve_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to plot Precision-Recall curve: {e}", exc_info=True)
+        
+        # --- Save Optimal Threshold (as before) ---
+        threshold_data = {"optimal_threshold": optimal_threshold}
+        try:
+            with open("optimal_threshold.json", "w") as f: json.dump(threshold_data, f, indent=4)
             shutil.copy("optimal_threshold.json", os.path.join(self.run_dir, f"optimal_threshold_{self.timestamp}.json"))
             self.logger.info(f"Optimal threshold saved to optimal_threshold.json and {self.run_dir}")
         except Exception as e:
-             self.logger.error(f"Failed to save optimal threshold: {e}", exc_info=True)
+            self.logger.error(f"Failed to save optimal threshold: {e}", exc_info=True)
 
         # --- Plot ROC ---
         try:
@@ -711,146 +853,139 @@ class DeepfakeTrainer:
             plt.close()
             self.logger.info(f"ROC curve saved to {roc_path}")
         except Exception as e:
-             self.logger.error(f"Failed to plot ROC curve: {e}", exc_info=True)
+            self.logger.error(f"Failed to plot ROC curve: {e}", exc_info=True)
 
-
-        return optimal_threshold, roc_auc
+        return optimal_threshold, roc_auc_val
 
     def generate_evaluation_plots(self, optimal_threshold):
-         """Generates Classification Report and Confusion Matrix plots."""
-         self.logger.info("Generating evaluation plots...")
-         self.model.eval()
-         all_preds_optimal = []
-         all_labels = []
-         with torch.no_grad():
-             for inputs, labels in tqdm(self.val_loader, desc='Generating Predictions', unit='batch'):
-                 valid_indices = labels != -1
-                 if not valid_indices.any(): continue
-                 inputs, labels = inputs[valid_indices], labels[valid_indices]
+        """Generates Classification Report and Confusion Matrix plots."""
+        self.logger.info(f"Generating evaluation plots using optimal threshold: {optimal_threshold:.4f}")
+        self.model.eval()
+        all_preds_optimal = []
+        all_labels_plots = [] # Use a different name
+        with torch.no_grad():
+            for inputs, labels_batch in tqdm(self.val_loader, desc='Generating Predictions for Plots', unit='batch'):
+                valid_indices = labels_batch != -1
+                if not valid_indices.any(): continue
+                inputs_filt, labels_filt = inputs[valid_indices], labels_batch[valid_indices]
+                inputs_filt = inputs_filt.to(self.device)
+                outputs = self.model(inputs_filt)
+                probabilities_fake = torch.softmax(outputs, dim=1)[:, 1]
+                preds = (probabilities_fake >= optimal_threshold).long()
+                all_preds_optimal.extend(preds.cpu().numpy())
+                all_labels_plots.extend(labels_filt.cpu().numpy())
+        
+        all_labels_plots_np = np.array(all_labels_plots)
+        all_preds_optimal_np = np.array(all_preds_optimal)
 
-                 inputs = inputs.to(self.device)
-                 outputs = self.model(inputs)
-                 probabilities_fake = torch.softmax(outputs, dim=1)[:, 1]
-                 preds = (probabilities_fake >= optimal_threshold).long() # Apply optimal threshold
+        if len(all_labels_plots_np) == 0:
+            self.logger.warning("No valid labels for plot generation. Skipping classification report and CM.")
+            return
 
-                 all_preds_optimal.extend(preds.cpu().numpy())
-                 all_labels.extend(labels.cpu().numpy())
-
-         all_labels = np.array(all_labels)
-         all_preds_optimal = np.array(all_preds_optimal)
-
-         if len(all_labels) == 0:
-              self.logger.warning("No valid labels found during prediction generation for plots.")
-              return
-
-         # --- Classification Report ---
-         try:
-             self.logger.info("\n" + classification_report(all_labels, all_preds_optimal, target_names=['Real', 'Fake']))
-             report = classification_report(all_labels, all_preds_optimal, output_dict=True, target_names=['Real', 'Fake'])
-             df_report = pd.DataFrame(report).iloc[:-1, :].T # Exclude avg/total row, transpose
-
-             plt.figure(figsize=(8, 4))
-             sns.heatmap(df_report[['precision', 'recall', 'f1-score']], annot=True, fmt=".3f", cmap="viridis")
-             plt.title(f'Classification Report (Threshold = {optimal_threshold:.3f})')
-             report_path = os.path.join(self.run_dir, f'classification_report_{self.timestamp}.png')
-             plt.savefig(report_path)
-             plt.close()
-             self.logger.info(f"Classification report plot saved to {report_path}")
-         except Exception as e:
-              self.logger.error(f"Failed to generate classification report plot: {e}", exc_info=True)
-
-
-         # --- Confusion Matrix ---
-         try:
-             cm = confusion_matrix(all_labels, all_preds_optimal)
-             plt.figure(figsize=(6, 5))
-             sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                         xticklabels=["Pred Real", "Pred Fake"], yticklabels=["True Real", "True Fake"])
-             plt.ylabel('Actual Label')
-             plt.xlabel('Predicted Label')
-             plt.title(f'Confusion Matrix (Threshold = {optimal_threshold:.3f})')
-             cm_path = os.path.join(self.run_dir, f'confusion_matrix_{self.timestamp}.png')
-             plt.savefig(cm_path)
-             plt.close()
-             self.logger.info(f"Confusion matrix plot saved to {cm_path}")
-         except Exception as e:
-             self.logger.error(f"Failed to generate confusion matrix plot: {e}", exc_info=True)
+        try:
+            self.logger.info("\n" + classification_report(all_labels_plots_np, all_preds_optimal_np, target_names=['Real', 'Fake'], zero_division=0))
+            report = classification_report(all_labels_plots_np, all_preds_optimal_np, output_dict=True, target_names=['Real', 'Fake'], zero_division=0)
+            df_report = pd.DataFrame(report).iloc[:-1, :].T
+            plt.figure(figsize=(8, 4)); sns.heatmap(df_report[['precision', 'recall', 'f1-score']], annot=True, fmt=".3f", cmap="viridis")
+            plt.title(f'Classification Report (Threshold = {optimal_threshold:.3f})')
+            report_path = os.path.join(self.run_dir, f'classification_report_{self.timestamp}.png'); plt.savefig(report_path); plt.close()
+            self.logger.info(f"Classification report plot saved to {report_path}")
+        except Exception as e:
+             self.logger.error(f"Failed to generate classification report plot: {e}", exc_info=True)
+        try:
+            cm = confusion_matrix(all_labels_plots_np, all_preds_optimal_np)
+            plt.figure(figsize=(6, 5)); sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Pred Real", "Pred Fake"], yticklabels=["True Real", "True Fake"])
+            plt.ylabel('Actual Label'); plt.xlabel('Predicted Label'); plt.title(f'Confusion Matrix (Threshold = {optimal_threshold:.3f})')
+            cm_path = os.path.join(self.run_dir, f'confusion_matrix_{self.timestamp}.png'); plt.savefig(cm_path); plt.close()
+            self.logger.info(f"Confusion matrix plot saved to {cm_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to generate confusion matrix plot: {e}", exc_info=True)
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
     DEFAULT_CONFIG = {
         'data_dir': 'dataset',      
         'save_dir': 'models',       
-        'batch_size': 24,           # Adjust based on GPU memory
-        'learning_rate': 0.0005,    # 会需要调整
-        'epochs': 50,               # Number of training 次数
-        'frames_per_video': 25,     # Frames to sample per video
-        'clean_start': True,        # Remove old processed faces before starting
-        'model_version': 'efficientnet-b2',
-        'image_size': 260,          
-        'num_workers': 4,           # DataLoader workers （看CPU有多少个core)
-        'seed': 42,                 # Random seed
-        'val_split': 0.2,           # Validation set proportion
-        'face_min_confidence': 0.9, # MTCNN confidence threshold
-        'face_min_size': 50,        # Minimum face pixel size
-        'scheduler_patience': 5,    # Patience for ReduceLROnPlateau
-        'early_stopping_patience': 10, # Patience for early stopping
-        'unfreeze_blocks': 3,
-        'classifier_lr_mult': 5.0,
+        'batch_size': 20,          
+        'learning_rate': 0.0005,   
+        'epochs': 30,              # training 次数
+        'frames_per_video': 25,     # 每个video的帧数（可以调整来控制frame extraction的间隔）
+        'clean_start': True,       
+        'model_version': 'efficientnet-b1',
+        'image_size': 240, # Will be auto-set if not specified via args and model known          
+        'num_workers': 8,           
+        'seed': 42,                 
+        'val_split': 0.2,           
+        'face_min_confidence': 0.9, 
+        'face_min_size': 50,        
+        'scheduler_patience': 5,   
+        'early_stopping_patience': 10, 
+        'unfreeze_blocks': 3,       
+        'classifier_lr_mult': 5.0,  
         'unfrozen_lr_mult': 2.0,
-        'focal_loss_alpha': 0.75,
-        'focal_loss_gamma': 2.0
+        'use_focal_loss': True,       # Set to True to use FocalLoss
+        'focal_loss_alpha': 0.25,    # Alpha for FocalLoss (float for class 1, or list [alpha_c0, alpha_c1])
+        'focal_loss_gamma': 2.0,     # Gamma for FocalLoss
+        'gradient_accumulation_steps': 1, # Set > 1 for gradient accumulation
+        'clip_grad_norm': True,      # Set to True to enable gradient clipping
+        'grad_norm_max': 1.0          
     }
 
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="Train Deepfake Detection Model")
-    parser.add_argument('--data_dir', type=str, help=f"Path to dataset directory (default: {DEFAULT_CONFIG['data_dir']})")
-    parser.add_argument('--save_dir', type=str, help=f"Base directory to save models/results (default: {DEFAULT_CONFIG['save_dir']})")
-    parser.add_argument('--epochs', type=int, help=f"Number of training epochs (default: {DEFAULT_CONFIG['epochs']})")
-    parser.add_argument('--batch_size', type=int, help=f"Batch size (default: {DEFAULT_CONFIG['batch_size']})")
-    parser.add_argument('--lr', type=float, help=f"Learning rate (default: {DEFAULT_CONFIG['learning_rate']})")
-    parser.add_argument('--img_size', type=int, help="Image input size (required, e.g., 224 for B0, 260 for B2)")
-    parser.add_argument('--model', type=str, help=f"EfficientNet version (default: {DEFAULT_CONFIG['model_version']})")
-    parser.add_argument('--workers', type=int, help=f"DataLoader workers (default: {DEFAULT_CONFIG['num_workers']})")
-    parser.add_argument('--seed', type=int, help=f"Random seed (default: {DEFAULT_CONFIG['seed']})")
-    parser.add_argument('--no_clean', action='store_true', help="Do not remove old processed faces")
-    # Add arguments for other config items if needed
+    parser.add_argument('--data_dir', type=str)
+    parser.add_argument('--save_dir', type=str)
+    parser.add_argument('--epochs', type=int)
+    parser.add_argument('--batch_size', type=int)
+    parser.add_argument('--lr', type=float, dest='learning_rate') # Ensure dest matches config key
+    parser.add_argument('--img_size', type=int)
+    parser.add_argument('--model', type=str, dest='model_version') # Ensure dest matches
+    parser.add_argument('--workers', type=int, dest='num_workers') # Ensure dest matches
+    parser.add_argument('--seed', type=int)
+    parser.add_argument('--no_clean', action='store_false', dest='clean_start') # Corrected action for 'False'
+    parser.add_argument('--use_focal_loss', action='store_true')
+    parser.add_argument('--grad_accum_steps', type=int, dest='gradient_accumulation_steps')
+    parser.add_argument('--clip_grad', action='store_true', dest='clip_grad_norm')
 
     args = parser.parse_args()
 
     # --- Build Final Configuration ---
     config = DEFAULT_CONFIG.copy()
-    # Update from args where provided
-    if args.data_dir: config['data_dir'] = args.data_dir
-    if args.save_dir: config['save_dir'] = args.save_dir
-    if args.epochs: config['epochs'] = args.epochs
-    if args.batch_size: config['batch_size'] = args.batch_size
-    if args.lr: config['learning_rate'] = args.lr
-    if args.model: config['model_version'] = args.model
-    if args.workers: config['num_workers'] = args.workers
-    if args.seed: config['seed'] = args.seed
-    if args.no_clean: config['clean_start'] = False
-    # Handle image size based on model if not specified
-    if args.img_size:
-        config['image_size'] = args.img_size
-    else:
-        # Auto-detect based on model version (add more mappings as needed)
+
+    # Update config from args
+    for arg_name, arg_val in vars(args).items():
+        if arg_val is not None: # Only update if arg was provided
+            if arg_name in config or arg_name in ['learning_rate', 'model_version', 'num_workers', 'clean_start', 'gradient_accumulation_steps', 'clip_grad_norm']: # handle dest renaming
+                config_key = arg_name
+                # Handle specific renames if 'dest' was used in add_argument
+                if arg_name == 'lr': config_key = 'learning_rate'
+                if arg_name == 'model': config_key = 'model_version'
+                if arg_name == 'workers': config_key = 'num_workers'
+                if arg_name == 'grad_accum_steps': config_key = 'gradient_accumulation_steps'
+                if arg_name == 'clip_grad': config_key = 'clip_grad_norm'
+                if arg_name == 'no_clean': config_key = 'clean_start' # Special handling for store_false
+
+                config[config_key] = arg_val
+    
+    # Auto-set image_size if not provided
+    if args.img_size is None:
         model_to_size = {'efficientnet-b0': 224, 'efficientnet-b1': 240, 'efficientnet-b2': 260,
                          'efficientnet-b3': 300, 'efficientnet-b4': 380, 'efficientnet-b5': 456,
                          'efficientnet-b6': 528, 'efficientnet-b7': 600}
         if config['model_version'] in model_to_size:
             config['image_size'] = model_to_size[config['model_version']]
-            print(f"Auto-detected image size for {config['model_version']}: {config['image_size']}") # Use print before logging setup
+            print(f"Auto-set image size for {config['model_version']}: {config['image_size']}")
         else:
-             # Fallback or raise error if size not specified and model unknown
-             print(f"Warning: Image size not specified for {config['model_version']}. Defaulting to {DEFAULT_CONFIG['image_size']}. Use --img_size.")
-             config['image_size'] = DEFAULT_CONFIG['image_size'] # Or raise error
+            print(f"Warning: Image size not specified via --img_size for {config['model_version']}. Using default: {config['image_size']}.")
+    else: # If img_size was provided via arg
+        config['image_size'] = args.img_size
 
     # --- Setup Logging (now uses timestamp from trainer) ---
     # Initial basic config for argument parsing phase
     logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[logging.StreamHandler(sys.stdout)])
-    logger = get_logger(__name__)
-    logger.info("Initial configuration completed.")
+    logger = get_logger(__name__) # Get initial logger
+    logger.info("Initial configuration from args completed. Final config for trainer:")
+    for k,v in config.items(): logger.info(f"  {k}: {v}")
     # Full logging setup happens inside Trainer using its timestamp
 
     # --- Set Seed ---
@@ -859,9 +994,6 @@ if __name__ == "__main__":
     np.random.seed(config['seed'])
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config['seed'])
-        # Deterministic algorithms can impact performance, use if needed
-        # torch.backends.cudnn.deterministic = True
-        # torch.backends.cudnn.benchmark = False
 
     # --- Run Training ---
     trainer = DeepfakeTrainer(config)
@@ -869,9 +1001,9 @@ if __name__ == "__main__":
         trainer.prepare_data()
         trainer.train()
         logger.info("Training run completed successfully.")
-    except ValueError as ve: # Catch specific expected errors like no faces
-         logger.critical(f"Training aborted due to ValueError: {ve}", exc_info=True)
+    except ValueError as ve:
+        logger.critical(f"Training aborted due to ValueError: {ve}", exc_info=True)
     except FileNotFoundError as fnf:
-         logger.critical(f"Training aborted due to FileNotFoundError: {fnf}", exc_info=True)
+        logger.critical(f"Training aborted due to FileNotFoundError: {fnf}", exc_info=True)
     except Exception as e:
         logger.critical(f"An unexpected error occurred during training: {e}", exc_info=True)

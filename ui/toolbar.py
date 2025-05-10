@@ -20,23 +20,23 @@ class FloatingToolbar(tk.Toplevel):
         # --- Frame for ALL buttons ---
         button_frame = ttk.Frame(self)
         # Adjust padding if needed now that video is gone
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10, expand=True)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5, padx=5, expand=True)
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
         button_frame.columnconfigure(3, weight=1)
 
         # --- Buttons ---
-        self.start_btn = ttk.Button(button_frame, text="Start Detection", command=self.app.start_detection)
+        self.start_btn = ttk.Button(button_frame, text="Start Detection", command=self.app.start_detection, style="Toolbar.TButton")
         self.start_btn.grid(row=0, column=0, columnspan=2, padx=2, pady=2, sticky="ew") # Span 2 columns
 
-        self.stop_btn = ttk.Button(button_frame, text="Stop Detection", command=self.app.stop_detection)
+        self.stop_btn = ttk.Button(button_frame, text="Stop Detection", command=self.app.stop_detection, style="Toolbar.TButton")
         self.stop_btn.grid(row=0, column=2, columnspan=2, padx=2, pady=2, sticky="ew") # Span 2 columns
 
-        self.notify_btn = ttk.Button(button_frame, text="Show Status", command=self.app.show_notifications)
+        self.notify_btn = ttk.Button(button_frame, text="Show Status", command=self.app.show_notifications, style="Toolbar.TButton")
         self.notify_btn.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="ew") # Row 1
 
-        self.show_main_btn = ttk.Button(button_frame, text="Show Main Window", command=self.handle_close)
+        self.show_main_btn = ttk.Button(button_frame, text="Show Main Window", command=self.handle_close, style="Toolbar.TButton")
         self.show_main_btn.grid(row=1, column=2, columnspan=2, padx=2, pady=2, sticky="ew") # Row 1
 
         self.update_button_states() # Update initial state based on app controller
