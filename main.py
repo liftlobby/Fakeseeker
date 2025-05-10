@@ -1542,14 +1542,25 @@ class FakeSeekerApp:
 
             # Checksum verification
             checksum_expected = manifest.get('model_checksum')
-            if checksum_expected: 
+            if checksum_expected:
+                logger.info(f"Verifying model checksum. Expected: {checksum_expected}") # Add log
                 # Calculate hash of downloaded file
                 with open(model_save_path, 'rb') as f:
                     file_hash = hashlib.sha256(f.read()).hexdigest()
+                logger.info(f"Calculated checksum for downloaded file: {file_hash}") # Add log
                 if file_hash != checksum_expected:
-                    logger.error(f"Model checksum verification failed: Expected {checksum_expected}, got {file_hash}")
-                    self.root.after(0, lambda: messagebox.showerror("Update Failed", "Model checksum verification failed. Please try again."))
-                    return
+                    logger.error(f"Model checksum verification FAILED: Expected {checksum_expected}, got {file_hash}")
+                    # Optionally delete the corrupted downloaded file
+                    try:
+                        os.remove(model_save_path)
+                        logger.info(f"Deleted corrupted model file: {model_save_path}")
+                    except Exception as del_e:
+                        logger.error(f"Error deleting corrupted model file: {del_e}")
+                    self.root.after(0, lambda: messagebox.showerror("Update Failed", "Model checksum verification failed. The downloaded file might be corrupted. Please try the update again."))
+                    return # Stop the update process
+                logger.info("Model checksum verification successful.")
+            else:
+                logger.warning("No model_checksum found in manifest. Skipping verification.")
 
             # Download Threshold
             logger.info(f"Downloading threshold from {threshold_url} to {threshold_save_path}")
