@@ -3,5 +3,6 @@
     "model_filename": "best_model_20250502_204443.pth",
     "model_url": "https://github.com/liftlobby/Fakeseeker/releases/download/1.2.0/best_model_20250502_204443.pth",
     "threshold_url": "https://github.com/liftlobby/Fakeseeker/releases/download/1.2.0/optimal_threshold.json",
+    "model_checksum": "60a93feae2804363ec2260cb629de0c8f48ef374a1559e72fb991ce616dc428f",
     "release_notes": "Model v1.2: Improved accuracy using combined datasets and deeper fine-tuning"
 }
