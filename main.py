@@ -11,7 +11,6 @@ from mss import mss
 import pygetwindow as gw
 import threading
 import logging
-from logger_setup import setup_logging, get_logger
 import time
 import queue
 import sys
@@ -19,6 +18,31 @@ import ctypes
 import appdirs
 import hashlib
 import requests
+
+# --- AppUserModelID Setting ---
+_appid_set_successfully = False
+_appid_error_message = ""
+_myappid_for_log = "" # Variable to store myappid for logging after logger is set up
+if sys.platform == 'win32':
+    try:
+        myappid_val = u'ChuaKaiZenUTHM.FakeSeeker.1.0'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid_val)
+        _appid_set_successfully = True
+        _myappid_for_log = myappid_val # Store for logging
+    except Exception as e_appid:
+        _appid_error_message = str(e_appid)
+        # Silently pass for now, will log after logger is set up
+
+# --- Stdout/Stderr Redirection ---
+_stdout_redirected = False
+_stderr_redirected = False
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'): 
+    if sys.stdout is None or not hasattr(sys.stdout, 'fileno'):
+        sys.stdout = open(os.devnull, 'w')
+        _stdout_redirected = True
+    if sys.stderr is None or not hasattr(sys.stderr, 'fileno'):
+        sys.stderr = open(os.devnull, 'w')
+        _stderr_redirected = True
 
 # logic
 from deepfake_detector import DeepfakeDetector
@@ -33,8 +57,21 @@ from ui.history_page import HistoryPage
 from ui.report_page import ReportPage
 from ui.toolbar import FloatingToolbar
 
+# --- Setup Logging ---
+from logger_setup import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
+
+# --- Log AppUserModelID and Redirection Status (Optional, as refined before) ---
+if sys.platform == 'win32':
+    if _appid_set_successfully:
+        logger.info(f"AppUserModelID successfully set to: {_myappid_for_log}")
+    else:
+        logger.warning(f"Could not set AppUserModelID: {_appid_error_message}")
+if _stdout_redirected:
+    logger.info("sys.stdout redirected to os.devnull for bundled app.")
+if _stderr_redirected:
+    logger.info("sys.stderr redirected to os.devnull for bundled app.")
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """

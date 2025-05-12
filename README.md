@@ -13,7 +13,7 @@ Welcome to FakeSeeker! This guide will help you download and run the application
 1. Download the Application:
 
 - Click on this link to download the application file:
-[Application Download](https://drive.google.com/file/d/1UMtDyzLD4PV7QkngxoANNTZ9qqvvDJPO/view?usp=sharing) or you may find it on RELEASES page. [Release page](https://github.com/liftlobby/Fakeseeker/releases/tag/1.2.0)
+[Application Download](https://drive.google.com/file/d/1FvJEEQ0DbLwGv9dkMXnRF_qtF5bAOHKO/view?usp=sharing) or you may find it on RELEASES page. [Release page](https://github.com/liftlobby/Fakeseeker/releases/tag/1.2.0)
 
 - Your web browser will open the link. Depending on your Google Drive link settings, you might see a preview or a direct download prompt.
 
