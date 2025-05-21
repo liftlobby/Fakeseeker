@@ -99,19 +99,19 @@ class FakeSeekerApp:
         self.app_name = "FakeSeeker"
         self.app_author = "ChuaKaiZen_UTHM"
         self.root = root
-        self.root.title("FakeSeeker - Deepfake Detection Tool")
 
         # --- SETTING THE WINDOW ICON ---
         try:
-            # Use resource_path to find the icon
-            icon_path_for_window = resource_path(os.path.join('images', 'fakeseeker.ico')) # Or fakeseeker_logo.ico
+            icon_path_for_window = resource_path(os.path.join('images', 'fakeseeker.ico'))
             if os.path.exists(icon_path_for_window):
-                self.root.iconbitmap(icon_path_for_window)
+                self.root.iconbitmap(icon_path_for_window) # SET ICON HERE
                 logger.info(f"Window icon set from: {icon_path_for_window}")
             else:
-                logger.warning(f"Window icon 'fakeseeker.ico' (or logo) not found via resource_path: {icon_path_for_window}")
+                logger.warning(f"Window icon 'fakeseeker.ico' not found: {icon_path_for_window}")
         except Exception as e:
             logger.error(f"Failed to set window icon: {e}", exc_info=True)
+
+        self.root.title("FakeSeeker - Deepfake Detection Tool")
         
         self.root.geometry("1600x900")
         self.root.state("zoomed")
@@ -1688,12 +1688,12 @@ if __name__ == "__main__":
                 logger.warning(f"Error calling SetProcessDPIAware: {e}")
 
     logger.info("Starting FakeSeeker application...")
-    root = tk.Tk()
+    root = tk.Tk(className="FakeSeeker")
     root.withdraw()
     app = None
     try:
         app = FakeSeekerApp(root)
-        root.deiconify()
+        root.after(100, root.deiconify)
         root.mainloop()
     except Exception as main_err:
          logger.critical(f"Unhandled exception in main loop: {main_err}", exc_info=True)
