@@ -1,3 +1,22 @@
+import sys
+import ctypes
+# --- AppUserModelID Setting ---
+_appid_set_successfully = False
+_appid_error_message = ""
+_myappid_for_log = ""
+if sys.platform == 'win32':
+    try:
+        myappid_val = u'ChuaKaiZenUTHM.FakeSeeker.1.0'
+        # Ensure shell32 is available
+        if hasattr(ctypes, 'windll') and hasattr(ctypes.windll, 'shell32'):
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid_val)
+            _appid_set_successfully = True
+            _myappid_for_log = myappid_val
+        else:
+            _appid_error_message = "ctypes.windll.shell32 not available."
+    except Exception as e_appid:
+        _appid_error_message = str(e_appid)
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
@@ -13,25 +32,9 @@ import threading
 import logging
 import time
 import queue
-import sys
-import ctypes
 import appdirs
 import hashlib
 import requests
-
-# --- AppUserModelID Setting ---
-_appid_set_successfully = False
-_appid_error_message = ""
-_myappid_for_log = "" # Variable to store myappid for logging after logger is set up
-if sys.platform == 'win32':
-    try:
-        myappid_val = u'ChuaKaiZenUTHM.FakeSeeker.1.0'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid_val)
-        _appid_set_successfully = True
-        _myappid_for_log = myappid_val # Store for logging
-    except Exception as e_appid:
-        _appid_error_message = str(e_appid)
-        # Silently pass for now, will log after logger is set up
 
 # --- Stdout/Stderr Redirection ---
 _stdout_redirected = False
@@ -62,7 +65,7 @@ from logger_setup import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-# --- Log AppUserModelID and Redirection Status (Optional, as refined before) ---
+# --- Log AppUserModelID and Redirection Status---
 if sys.platform == 'win32':
     if _appid_set_successfully:
         logger.info(f"AppUserModelID successfully set to: {_myappid_for_log}")
@@ -258,6 +261,7 @@ class FakeSeekerApp:
             logger.warning("Clam theme not available, using default.")
 
         # Configure Styles
+        style.configure("Home.TButton", font=('Helvetica', 15), padding=10)
         style.configure("TLabel", font=('Helvetica', 14)) # Slightly larger default
         style.configure("Header.TLabel", font=('Helvetica', 30, 'bold')) # Significantly larger Header
         style.configure("SectionTitle.TLabel", font=('Helvetica', 18, 'bold')) # Larger Section Title
@@ -279,6 +283,9 @@ class FakeSeekerApp:
         style.configure("ReportSection.TLabelframe.Label", font=('Helvetica', 14, 'bold'), background=report_bg_color)
         style.configure("Detail.TLabel", font=('Helvetica', 14)) # No background specified, should inherit
         style.configure("Header.TLabel", font=('Helvetica', 30, 'bold')) # No background, should inherit or be set explicitly
+        style.configure("Instructions.TLabelframe", padding=10)
+        style.configure("Instructions.TLabelframe.Label", font=('Helvetica', 16, 'bold')) # For the "How to Use FakeSeeker" title
+        style.configure("Instruction.TLabel", font=('Helvetica', 13), padding=2) # For the actual instruction lines
 
         logger.info("Styles configured successfully.")
 
@@ -550,10 +557,9 @@ class FakeSeekerApp:
         """Handles file selection dialog."""
         logger.debug("Opening file dialog...")
         try:
-            # --- CORRECTED LINE ---
             file_path = filedialog.askopenfilename(
-                title="Select Image or Video", # Keyword argument
-                filetypes=[                  # Keyword argument
+                title="Select Image or Video",
+                filetypes=[
                     ("All Supported Files", "*.jpg *.jpeg *.png *.mp4 *.avi *.mov"),
                     ("Image Files", "*.jpg *.jpeg *.png"),
                     ("Video Files", "*.mp4 *.avi *.mov"),
@@ -1402,9 +1408,7 @@ class FakeSeekerApp:
              messagebox.showwarning("Not Found", "Could not find the specified scan result to delete.")
 
     def update_scan_history(self, new_entry):
-        # --- CORRECTED LINE: Use self.history_file ---
         history_path = self.history_file
-        # --- End Correction ---
         history = []
         logger.debug(f"Attempting to update history file: {history_path}")
 
@@ -1433,7 +1437,7 @@ class FakeSeekerApp:
             # Append new entry (e.g., real-time summary)
             history.append(new_entry)
             # Update the in-memory history as well
-            self.scan_history = history # Keep in-memory list consistent
+            self.scan_history = history
 
             # Write the entire updated list back
             try:
@@ -1488,9 +1492,6 @@ class FakeSeekerApp:
             logger.info(f"Server version: {server_version}")
 
             # Simple string comparison (for versions like 1.0.0, 1.1.0, 2.0.0)
-            # For more complex versions (e.g., 1.0.0-beta), use 'packaging' library:
-            # from packaging import version
-            # if version.parse(server_version) > version.parse(local_version):
             if server_version > local_version:
                 logger.info("Update available!")
                 # Ask user on main thread using root.after (safer than direct call)
@@ -1679,23 +1680,20 @@ if __name__ == "__main__":
     if sys.platform == 'win32':
         try:
             awareness = 1
-            errorCode = ctypes.windll.shcore.SetProcessDpiAwareness(awareness)
-            logger.info(f"SetProcessDpiAwareness({awareness}) called, ErrorCode: {errorCode}")
+            ctypes.windll.shcore.SetProcessDpiAwareness(awareness)
         except AttributeError:
             try:
-                errorCode = ctypes.windll.user32.SetProcessDPIAware()
-                logger.info(f"SetProcessDPIAware() called, returned: {errorCode}") # Typically returns non-zero on success
-            except AttributeError:
-                logger.warning("Could not set DPI awareness (SetProcessDPIAware not found).")
+                ctypes.windll.user32.SetProcessDPIAware()
             except Exception as e:
-                 logger.warning(f"Error calling SetProcessDPIAware: {e}")
-        except Exception as e:
-             logger.warning(f"Error calling SetProcessDpiAwareness: {e}")
+                logger.warning(f"Error calling SetProcessDPIAware: {e}")
+
     logger.info("Starting FakeSeeker application...")
     root = tk.Tk()
+    root.withdraw()
     app = None
     try:
         app = FakeSeekerApp(root)
+        root.deiconify()
         root.mainloop()
     except Exception as main_err:
          logger.critical(f"Unhandled exception in main loop: {main_err}", exc_info=True)

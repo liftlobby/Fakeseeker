@@ -39,29 +39,12 @@ class ReportPage(ttk.Frame):
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
         # Bind events for layout updates
-        self.scrollable_frame.bind("<Configure>", self._on_frame_configure)
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_resize_configure_scrollregion)
 
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind_all("<Button-4>", self._on_mousewheel)    # Linux scroll up
-        self.canvas.bind_all("<Button-5>", self._on_mousewheel)   # Linux scroll down
-
-        self.scrollable_frame.bind("<Enter>", self._bind_mousewheel_globally)
-        self.scrollable_frame.bind("<Leave>", self._unbind_mousewheel_globally)
-
-    def _bind_mousewheel_globally(self, event):
-        """Bind mousewheel events globally when mouse enters the scrollable area."""
-        # Using bind_all ensures that the canvas's _on_mousewheel gets the event
-        # even if another widget within scrollable_frame has focus.
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
-        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
-
-    def _unbind_mousewheel_globally(self, event):
-        """Unbind global mousewheel events when mouse leaves the scrollable area."""
-        self.canvas.unbind_all("<MouseWheel>")
-        self.canvas.unbind_all("<Button-4>")
-        self.canvas.unbind_all("<Button-5>")
+        # Bind to the canvas itself and its direct children for more localized control
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)    # Windows/macOS
+        self.canvas.bind("<Button-4>", self._on_mousewheel)      # Linux scroll up
+        self.canvas.bind("<Button-5>", self._on_mousewheel)      # Linux scroll down
 
     def on_show(self):
         """Called when the page is raised."""
@@ -72,31 +55,59 @@ class ReportPage(ttk.Frame):
         # No specific action needed currently
         pass
 
-    def _on_frame_configure(self, event=None):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _on_canvas_configure(self, event):
-        self.canvas.itemconfig(self.canvas_window, width=event.width)
+    def _on_canvas_resize_configure_scrollregion(self, event=None):
+        """Called when the canvas widget itself is resized."""
+        if not self.canvas.winfo_exists():
+            return
+        canvas_width = self.canvas.winfo_width() # Get current canvas width
+        if self.canvas_window:
+            # Update the width of the scrollable_frame window item to match the canvas
+            current_item_width = self.canvas.itemcget(self.canvas_window, "width")
+            if str(canvas_width) != current_item_width: # itemcget returns string
+                self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+                
+        self.canvas.after_idle(self._update_scrollregion)
+    
+    def _update_scrollregion(self):
+        """Safely updates the canvas scrollregion."""
+        if self.canvas.winfo_exists() and self.scrollable_frame.winfo_exists():
+            # Ensure the scrollable_frame's geometry is up-to-date before bbox
+            self.scrollable_frame.update_idletasks()
+            bbox = self.canvas.bbox("all")
+            if bbox: # bbox can be None if no items or canvas not ready
+                self.canvas.configure(scrollregion=bbox)
 
     def _on_mousewheel(self, event):
-        # Determine scroll direction and amount (same as HistoryPage)
+        current_y_view = self.canvas.yview()
+        scroll_val = 0
+
         if sys.platform.startswith('linux'):
             if event.num == 4: scroll_val = -1
             elif event.num == 5: scroll_val = 1
-            else: return
+            else: return "break" # Important to return "break" if not handling
         elif sys.platform == 'darwin':
-            scroll_val = -1 * event.delta
-        else:
-            if event.delta == 0: return
+            if event.delta < 0: scroll_val = 1
+            elif event.delta > 0: scroll_val = -1
+            else: return "break"
+        else: # Windows
+            if event.delta == 0: return "break"
             scroll_val = -1 * (event.delta // 120)
 
-        current_y_view = self.canvas.yview()
-        if scroll_val < 0: # Scrolling up
-            if current_y_view[0] > 0.0001:
-                self.canvas.yview_scroll(scroll_val, "units")
-        elif scroll_val > 0: # Scrolling down
-            if current_y_view[1] < 0.9999:
-                 self.canvas.yview_scroll(scroll_val, "units")
+        did_scroll = False
+        if scroll_val < 0 and current_y_view[0] > 0.00001:
+            self.canvas.yview_scroll(scroll_val, "units")
+            did_scroll = True
+        elif scroll_val > 0 and current_y_view[1] < 0.99999:
+            self.canvas.yview_scroll(scroll_val, "units")
+            did_scroll = True
+        else:
+            # If no scroll happened (already at limit), still break to prevent parent scroll
+            return "break"
+
+        if did_scroll:
+            return "break"
+
+        return "break"
 
     def _load_thumbnail(self, abs_path, size=(150, 150)):
         """Loads and caches thumbnail images."""
@@ -242,6 +253,7 @@ class ReportPage(ttk.Frame):
                 else:
                     ttk.Label(face_container, text="[Image N/A]", background=effective_bg_color, foreground="grey").pack(pady=5, ipadx=10, ipady=10)
 
-        self.scrollable_frame.update_idletasks()
-        self._on_frame_configure()
+        # --- CRITICAL: After adding all widgets to scrollable_frame ---
+        self.scrollable_frame.update_idletasks() # Ensure all new widgets are sized
+        self._update_scrollregion() # Update scroll region
         self.canvas.yview_moveto(0)

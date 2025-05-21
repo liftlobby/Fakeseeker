@@ -58,6 +58,12 @@ logs/
 reports/scan_history.json
 reports/thumbnails/
 
+# checksum
+checksum/
+
+#dataset
+dataset/
+
 # User data directory (created by appdirs logic)
 # Contains reports/, thumbnails/, models/, version.txt etc.
 # Ensure this matches the 'user_data_dir' name if using the fallback
