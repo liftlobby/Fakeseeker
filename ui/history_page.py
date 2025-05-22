@@ -12,14 +12,12 @@ class HistoryPage(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
-        self.thumbnail_cache = {} # Cache PhotoImage objects
+        self.thumbnail_cache = {}
         self.logger = logger
 
-        # --- Basic Layout ---
         header = ttk.Label(self, text="Scan History", style="Header.TLabel")
         header.pack(pady=10)
 
-        # Frame to contain the canvas and scrollbar
         scroll_container = ttk.Frame(self)
         scroll_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
@@ -30,50 +28,35 @@ class HistoryPage(ttk.Frame):
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        # This frame holds the actual content (history cards)
-        self.scrollable_frame = ttk.Frame(self.canvas) # No specific style, will inherit from parent or be default
+        self.scrollable_frame = ttk.Frame(self.canvas)
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
-        # Bind events for scrolling
         self.canvas.bind("<Configure>", self._on_canvas_resize_configure_scrollregion)
 
-        self.canvas.bind("<MouseWheel>", self._on_mousewheel) # For direct canvas focus
-        self.canvas.bind("<Button-4>", self._on_mousewheel)   # Linux scroll up
-        self.canvas.bind("<Button-5>", self._on_mousewheel)   # Linux scroll down
+        # Bind mousewheel to the canvas itself
+        self.canvas.bind("<MouseWheel>", self._do_scroll)
+        self.canvas.bind("<Button-4>", self._do_scroll)
+        self.canvas.bind("<Button-5>", self._do_scroll)
 
-        self.scrollable_frame.bind("<MouseWheel>", self._on_mousewheel)
-        self.scrollable_frame.bind("<Button-4>", self._on_mousewheel)
-        self.scrollable_frame.bind("<Button-5>", self._on_mousewheel)
-
-    def on_show(self): # Called by controller when page is raised
-        """Refresh history and scroll to top when page is shown."""
-        current_history = self.controller.load_scan_history() # Load fresh history
-        sorted_history = sorted(current_history, key=lambda x: x.get("timestamp", ""), reverse=True)
-        self.display_history(sorted_history)
-        self.canvas.yview_moveto(0)
+        # Initial binding for the scrollable_frame and its (currently non-existent) children
+        self._bind_children_for_scrolling(self.scrollable_frame)
 
     def _on_canvas_resize_configure_scrollregion(self, event=None):
-        """Called when the canvas widget itself is resized."""
-        if not self.canvas.winfo_exists():
-            return
+        if not self.canvas.winfo_exists(): return
         canvas_width = self.canvas.winfo_width()
-        if self.canvas_window: # Check if canvas_window item exists
+        if self.canvas_window:
             current_item_width = self.canvas.itemcget(self.canvas_window, "width")
             if str(canvas_width) != current_item_width:
                 self.canvas.itemconfig(self.canvas_window, width=canvas_width)
-
         self.canvas.after_idle(self._update_scrollregion)
 
     def _update_scrollregion(self):
-        """Safely updates the canvas scrollregion."""
         if self.canvas.winfo_exists() and self.scrollable_frame.winfo_exists():
             self.scrollable_frame.update_idletasks()
             bbox = self.canvas.bbox("all")
-            if bbox:
-                self.canvas.configure(scrollregion=bbox)
+            if bbox: self.canvas.configure(scrollregion=bbox)
 
-    def _on_mousewheel(self, event):
-        """Handle mouse wheel scrolling."""
+    def _do_scroll(self, event):
         current_y_view = self.canvas.yview()
         scroll_val = 0
 
@@ -97,12 +80,24 @@ class HistoryPage(ttk.Frame):
             self.canvas.yview_scroll(scroll_val, "units")
             did_scroll = True
         
-        if did_scroll:
-            return "break" # Consume event if scroll happened
-        return "break" # Generally consume to prevent parent scrolling
+        return "break" # Always consume to prevent parent/other weird scroll behaviors
+
+    def _bind_children_for_scrolling(self, parent_widget):
+        parent_widget.bind("<MouseWheel>", self._do_scroll, add="+")
+        parent_widget.bind("<Button-4>", self._do_scroll, add="+")
+        parent_widget.bind("<Button-5>", self._do_scroll, add="+")
+        for child in parent_widget.winfo_children():
+            if not isinstance(child, ttk.Scrollbar): # Avoid binding to scrollbar itself
+                self._bind_children_for_scrolling(child)
+
+    def on_show(self):
+        current_history = self.controller.load_scan_history()
+        sorted_history = sorted(current_history, key=lambda x: x.get("timestamp", ""), reverse=True)
+        self.display_history(sorted_history)
+        if self.canvas.winfo_exists(): # Ensure canvas exists before yview_moveto
+             self.canvas.yview_moveto(0)
 
     def _safe_float(self, value):
-        """Safely convert value to float."""
         if isinstance(value, tuple): return float(value[0])
         try: return float(value)
         except: return 0.0
@@ -117,96 +112,84 @@ class HistoryPage(ttk.Frame):
             img = Image.open(abs_path); img.thumbnail(size, Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img); self.thumbnail_cache[cache_key] = photo
             return photo
-        except FileNotFoundError:
-            self.logger.error(f"HistoryPage: Thumb not found: {abs_path}")
-        except Exception as e:
-            self.logger.error(f"HistoryPage: Thumb load fail {abs_path}: {e}", exc_info=True)
+        except FileNotFoundError: self.logger.error(f"HistoryPage: Thumb not found: {abs_path}")
+        except Exception as e: self.logger.error(f"HistoryPage: Thumb load fail {abs_path}: {e}", exc_info=True)
         self.thumbnail_cache[cache_key] = None; return None
 
     def display_history(self, history_data):
-        """Clears and rebuilds the history display."""
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
-        self.thumbnail_cache.clear() # Clear cache on full redisplay
+        self.thumbnail_cache.clear()
 
         if not history_data:
             ttk.Label(self.scrollable_frame, text="No scan history found.", style="Detail.TLabel").pack(pady=20)
-            self.scrollable_frame.update_idletasks() # Ensure frame is updated
-            self._update_scrollregion() # Update scrollregion even for empty content
-            return
+        else:
+            threshold = self.controller.detector.optimal_threshold
+            columns = 3
+            for i in range(columns): self.scrollable_frame.grid_columnconfigure(i, weight=1)
 
-        threshold = self.controller.detector.optimal_threshold
-        columns = 3
+            for idx, scan in enumerate(history_data):
+                row_idx = idx // columns
+                col_idx = idx % columns
+                result_card = ttk.Frame(self.scrollable_frame, padding=10, style="Card.TFrame")
+                result_card.grid(row=row_idx, column=col_idx, padx=10, pady=10, sticky="nsew")
+                
+                detection_type = scan.get("detection_type", "scanned")
+                timestamp_str = scan.get("timestamp", "Unknown Time")
+                try:
+                    ts_obj = datetime.strptime(timestamp_str.split('.')[0], "%Y%m%d_%H%M%S")
+                    display_ts = ts_obj.strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    display_ts = timestamp_str[:16] if len(timestamp_str) >=16 else timestamp_str
 
-        for i in range(columns):
-            self.scrollable_frame.grid_columnconfigure(i, weight=1)
+                ttk.Label(result_card, text=f"Scan #{len(history_data)-idx}", font=('Helvetica', 9, 'bold')).pack(anchor="nw")
+                ttk.Label(result_card, text=display_ts, font=('Helvetica', 10)).pack(anchor="center", pady=2)
 
-        for idx, scan in enumerate(history_data):
-            row_idx = idx // columns
-            col_idx = idx % columns
-            
-            detection_type = scan.get("detection_type", "scanned")
-            timestamp_str = scan.get("timestamp", "Unknown Time")
-            try:
-                ts_obj = datetime.strptime(timestamp_str.split('.')[0], "%Y%m%d_%H%M%S")
-                display_ts = ts_obj.strftime("%Y-%m-%d %H:%M")
-            except ValueError:
-                display_ts = timestamp_str[:16] if len(timestamp_str) >=16 else timestamp_str
+                card_overall_result, card_avg_prob_text, card_status_style = "Unknown", "", "Detail.TLabel"
+                results_data = scan.get("results", [])
+                valid_probs = [r for r in results_data if isinstance(r, (float, int))]
 
-            result_card = ttk.Frame(self.scrollable_frame, padding=10, style="Card.TFrame")
-            result_card.grid(row=row_idx, column=col_idx, padx=10, pady=10, sticky="nsew")
-            
-            ttk.Label(result_card, text=f"Scan #{len(history_data)-idx}", font=('Helvetica', 9, 'bold')).pack(anchor="nw")
-            ttk.Label(result_card, text=display_ts, font=('Helvetica', 10)).pack(anchor="center", pady=2)
+                if valid_probs:
+                    avg_prob_for_card = sum(valid_probs) / len(valid_probs)
+                    card_overall_result = "FAKE" if avg_prob_for_card >= threshold else "REAL"
+                    card_status_style = "StatusFake.TLabel" if card_overall_result == "FAKE" else "StatusReal.TLabel"
+                    card_avg_prob_text = f"Avg. Fake Prob: {avg_prob_for_card*100:.1f}%"
 
-            card_overall_result, card_avg_prob_text, card_status_style = "Unknown", "", "Detail.TLabel"
-            results_data = scan.get("results", [])
-            valid_probs = [r for r in results_data if isinstance(r, (float, int))]
+                type_display_str, additional_info = "", ""
+                thumb_path_to_load = scan.get("face_thumbnails", [None])[0]
 
-            if valid_probs:
-                avg_prob_for_card = sum(valid_probs) / len(valid_probs)
-                card_overall_result = "FAKE" if avg_prob_for_card >= threshold else "REAL"
-                card_status_style = "StatusFake.TLabel" if card_overall_result == "FAKE" else "StatusReal.TLabel"
-                card_avg_prob_text = f"Avg. Fake Prob: {avg_prob_for_card*100:.1f}%"
+                if detection_type == "real-time-detailed" or detection_type == "real-time-summary":
+                    type_display_str = "Real-Time Session"
+                    summary_data = scan.get("summary", {})
+                    if 'overall_result' in summary_data:
+                        card_overall_result = summary_data.get('overall_result', card_overall_result)
+                        card_status_style = "StatusFake.TLabel" if "FAKE" in card_overall_result else "StatusReal.TLabel"
+                    if 'average_fake_probability' in summary_data:
+                        card_avg_prob_text = f"Avg. Fake Prob: {summary_data['average_fake_probability']}"
+                elif detection_type == "scanned":
+                    type_display_str = "Uploaded Media"
+                    additional_info = os.path.basename(scan.get("file_path", "")) or "Unknown File"
+                else:
+                    type_display_str = detection_type.replace('-', ' ').title()
+                    additional_info = "Details in Report"
 
-            type_display_str = ""
-            additional_info = ""
-            thumb_path_to_load = scan.get("face_thumbnails", [None])[0]
+                ttk.Label(result_card, text=f"Type: {type_display_str}", font=('Helvetica', 10, 'italic')).pack(anchor="center", pady=1)
+                if additional_info: ttk.Label(result_card, text=additional_info, font=('Helvetica', 10), wraplength=200).pack(anchor="center", pady=1)
+                ttk.Label(result_card, text=f"Overall: {card_overall_result}", font=('Helvetica', 11, 'bold'), style=card_status_style).pack(anchor="center", pady=2)
+                if card_avg_prob_text: ttk.Label(result_card, text=card_avg_prob_text, font=('Helvetica', 10)).pack(anchor="center", pady=1)
+                
+                if thumb_path_to_load:
+                    photo = self._load_thumbnail(thumb_path_to_load)
+                    if photo:
+                        img_label = ttk.Label(result_card, image=photo); img_label.image = photo; img_label.pack(pady=5)
 
-            if detection_type == "real-time-detailed" or detection_type == "real-time-summary":
-                type_display_str = "Real-Time Session"
-                summary_data = scan.get("summary", {})
-                if 'overall_result' in summary_data:
-                    card_overall_result = summary_data.get('overall_result', card_overall_result)
-                    card_status_style = "StatusFake.TLabel" if "FAKE" in card_overall_result else "StatusReal.TLabel"
-                if 'average_fake_probability' in summary_data:
-                     card_avg_prob_text = f"Avg. Fake Prob: {summary_data['average_fake_probability']}"
-            elif detection_type == "scanned":
-                type_display_str = "Uploaded Media"
-                additional_info = os.path.basename(scan.get("file_path", "")) or "Unknown File"
-            else:
-                type_display_str = detection_type.replace('-', ' ').title()
-                additional_info = "Details in Report"
-
-            ttk.Label(result_card, text=f"Type: {type_display_str}", font=('Helvetica', 10, 'italic')).pack(anchor="center", pady=1)
-            if additional_info:
-                ttk.Label(result_card, text=additional_info, font=('Helvetica', 10), wraplength=200).pack(anchor="center", pady=1)
-            ttk.Label(result_card, text=f"Overall: {card_overall_result}", font=('Helvetica', 11, 'bold'), style=card_status_style).pack(anchor="center", pady=2)
-            if card_avg_prob_text:
-                ttk.Label(result_card, text=card_avg_prob_text, font=('Helvetica', 10)).pack(anchor="center", pady=1)
-            
-            if thumb_path_to_load:
-                photo = self._load_thumbnail(thumb_path_to_load)
-                if photo:
-                    img_label = ttk.Label(result_card, image=photo)
-                    img_label.image = photo
-                    img_label.pack(pady=5)
-
-            action_frame = ttk.Frame(result_card)
-            action_frame.pack(anchor="center", pady=5)
-            ttk.Button(action_frame, text="Details", command=lambda s=scan: self.controller.show_detailed_report(s)).pack(side="left", padx=5)
-            ttk.Button(action_frame, text="Delete", command=lambda s=scan: self.controller.delete_scan(s)).pack(side="left", padx=5)
+                action_frame = ttk.Frame(result_card)
+                action_frame.pack(anchor="center", pady=5)
+                ttk.Button(action_frame, text="Details", command=lambda s=scan: self.controller.show_detailed_report(s)).pack(side="left", padx=5)
+                ttk.Button(action_frame, text="Delete", command=lambda s=scan: self.controller.delete_scan(s)).pack(side="left", padx=5)
 
         self.scrollable_frame.update_idletasks()
-        self._update_scrollregion() # Update scrollregion based on new content
-        self.canvas.yview_moveto(0)
+        self._update_scrollregion()
+        self._bind_children_for_scrolling(self.scrollable_frame) # Re-bind after creating children
+        if self.canvas.winfo_exists():
+            self.canvas.yview_moveto(0)
