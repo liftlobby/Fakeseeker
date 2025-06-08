@@ -2,9 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import cv2
-# from .base_page import BasePage
 
-# class UploadPage(BasePage):
 class UploadPage(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
@@ -39,42 +37,61 @@ class UploadPage(ttk.Frame):
                                  command=self.controller.start_scan, state=tk.DISABLED)
         self.scan_btn.grid(row=0, column=1, padx=10)
 
+        self.cancel_scan_btn = ttk.Button(button_frame, text="Cancel Scan",
+                                          command=self.controller.cancel_file_scan, state=tk.DISABLED)
+        self.cancel_scan_btn.grid(row=0, column=2, padx=5)
+
     def update_preview(self, file_path):
         """Updates the preview label. Called by the controller."""
         try:
             if not file_path:
-                 self.preview_label.configure(image='')
-                 self.preview_label.image = None
-                 return
+                self.preview_label.configure(image='')
+                self.preview_label.image = None
+                return
 
-            if file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
+            if file_path.lower().endswith(('.jpg', '.jpeg', '.png')): # PNGs can also have orientation, though less common
                 image = Image.open(file_path)
-                image.thumbnail((400, 400))
+                
+                try:
+                    image = ImageOps.exif_transpose(image)
+                except Exception as exif_e:
+                    print(f"Warning: Could not apply EXIF transpose for {file_path}: {exif_e}")
+
+                image.thumbnail((400, 400)) # Max width/height for preview
                 photo = ImageTk.PhotoImage(image)
-                self.preview_label.configure(image=photo)
-                self.preview_label.image = photo # Keep reference
+                self.preview_label.configure(image=photo, text="") # Clear any "Preview N/A" text
+                self.preview_label.image = photo
             elif file_path.lower().endswith(('.mp4', '.avi', '.mov')):
                 cap = cv2.VideoCapture(file_path)
                 ret, frame = cap.read()
                 cap.release()
                 if ret:
+                    height, width = frame.shape[:2]
+                    if width < height: # Likely a portrait video stored rotated landscape by cv2
+                        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
                     cv2_im = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     img = Image.fromarray(cv2_im)
                     img.thumbnail((400, 400))
                     photo = ImageTk.PhotoImage(img)
-                    self.preview_label.configure(image=photo)
+                    self.preview_label.configure(image=photo, text="")
                     self.preview_label.image = photo
                 else:
-                    self.preview_label.configure(text="Preview N/A")
+                    self.preview_label.configure(text="Preview N/A", image='')
             else:
-                 self.preview_label.configure(text="Preview N/A")
+                 self.preview_label.configure(text="Preview N/A", image='')
 
         except Exception as e:
             messagebox.showerror("Preview Error", f"Failed to load preview: {str(e)}")
             self.preview_label.configure(image='', text="Preview Error")
             self.preview_label.image = None
 
-    def set_scan_button_state(self, state):
-        """Allows controller to enable/disable scan button."""
+    def set_buttons_for_scan_state(self, is_scanning):
+        if hasattr(self, 'upload_btn') and self.upload_btn.winfo_exists():
+            self.upload_btn.config(state=tk.DISABLED if is_scanning else tk.NORMAL)
+        
         if hasattr(self, 'scan_btn') and self.scan_btn.winfo_exists():
-            self.scan_btn.config(state=state)
+            can_start_scan = self.controller.selected_file is not None
+            self.scan_btn.config(state=tk.NORMAL if can_start_scan and not is_scanning else tk.DISABLED)
+        if hasattr(self, 'cancel_scan_btn') and self.cancel_scan_btn.winfo_exists():
+            self.cancel_scan_btn.config(state=tk.NORMAL if is_scanning else tk.DISABLED)

@@ -149,6 +149,10 @@ class FakeSeekerApp:
         self.scan_queue = queue.Queue()
         self.scan_status_label = None # Reference to status label in UploadPage
 
+        self.file_scan_thread = None
+        self.cancel_scan_flag = threading.Event() # Used to signal cancellation
+        self.is_file_scanning = False # Track if a file scan is active
+
         # --- Determine User Data Directory ---
         try:
              user_data_dir = appdirs.user_data_dir(self.app_name, self.app_author)
@@ -402,12 +406,14 @@ class FakeSeekerApp:
 
     def show_upload_page(self):
         self.selected_file = None
+        self.is_file_scanning = False # Reset scan state when showing page
+        self.cancel_scan_flag.clear() # Ensure flag is clear
         self.show_frame("UploadPage")
         upload_page = self.pages.get("UploadPage")
         if upload_page:
             upload_page.update_preview(None)
-            upload_page.set_scan_button_state(tk.DISABLED)
-            self._update_status_label("") # Clear status on page load
+            upload_page.set_buttons_for_scan_state(is_scanning=False) # Update all buttons
+            self._update_status_label("")
 
     def show_realtime_page(self):
         self.show_frame("RealtimePage")
@@ -566,109 +572,209 @@ class FakeSeekerApp:
                     ("All Files", "*.*")
                 ]
             )
+            upload_page = self.pages.get("UploadPage") # Get page instance
+
             if file_path:
                 self.selected_file = file_path
                 logger.info(f"File selected: {file_path}")
-                upload_page = self.pages.get("UploadPage")
                 if upload_page:
                     upload_page.update_preview(file_path)
-                    upload_page.set_scan_button_state(tk.NORMAL)
+                    # Use the new method: is_scanning is False because we just selected a file
+                    upload_page.set_buttons_for_scan_state(is_scanning=False)
             else:
                 logger.debug("File selection cancelled.")
                 self.selected_file = None
-                upload_page = self.pages.get("UploadPage")
                 if upload_page:
                     upload_page.update_preview(None)
-                    upload_page.set_scan_button_state(tk.DISABLED)
+                    # Use the new method: is_scanning is False, and Start Scan should be disabled
+                    upload_page.set_buttons_for_scan_state(is_scanning=False)
         except Exception as e:
             logger.error(f"Error during file dialog: {e}", exc_info=True)
             messagebox.showerror("Error", f"Could not open file dialog:\n{e}")
 
     def start_scan(self):
-        """Initiates the scan process in a background thread."""
         if not self.selected_file:
             messagebox.showwarning("No File", "Please select a file first.")
             return
+        if self.is_file_scanning:
+            logger.warning("Scan attempt while another scan is already in progress or cleaning up. Ignoring.")
+            messagebox.showwarning("Scan in Progress", "A file scan is already running or finishing up. Please wait.")
+            return
 
         logger.info(f"Starting scan for: {self.selected_file}")
+        self.is_file_scanning = True
+        self.cancel_scan_flag.clear() # Clear flag before starting new scan
+
         upload_page = self.pages.get("UploadPage")
         if upload_page:
-                upload_page.set_scan_button_state(tk.DISABLED)
+            upload_page.set_buttons_for_scan_state(is_scanning=True)
 
-        self._update_status_label("Starting scan...") # Update status via helper
+        self._update_status_label("Starting scan...")
 
-        scan_thread = threading.Thread(target=self._perform_scan_async,
-                                        args=(self.selected_file,),
-                                        daemon=True)
-        scan_thread.start()
-        self.root.after(100, self.process_scan_queue) # Start queue checker
+        # Store reference to the thread
+        self.file_scan_thread = threading.Thread(target=self._perform_scan_async,
+                                                 args=(self.selected_file,),
+                                                 daemon=True)
+        self.file_scan_thread.start()
+        self.root.after(100, self.process_scan_queue)
+
+    def cancel_file_scan(self):
+        if self.is_file_scanning and self.file_scan_thread and self.file_scan_thread.is_alive():
+            logger.info("User requested scan cancellation.")
+            self.cancel_scan_flag.set()
+            self._update_status_label("Cancelling scan...")
+            
+            upload_page = self.pages.get("UploadPage")
+            if upload_page: # Disable cancel button immediately
+                if hasattr(upload_page, 'cancel_scan_btn') and upload_page.cancel_scan_btn.winfo_exists():
+                    upload_page.cancel_scan_btn.config(state=tk.DISABLED)
+            # DO NOT set self.is_file_scanning = False here. Let process_scan_queue handle it
+            # when the 'done' or 'Scan Cancelled' message from the thread is processed.
+        else:
+            logger.info("No active file scan to cancel, or thread already finished.")
+            # If somehow is_file_scanning is true but thread is not alive, reset state.
+            if self.is_file_scanning and (not self.file_scan_thread or not self.file_scan_thread.is_alive()):
+                logger.warning("Resetting scan state due to inactive thread during cancel request.")
+                self.is_file_scanning = False
+                self.cancel_scan_flag.clear()
+                upload_page = self.pages.get("UploadPage")
+                if upload_page and upload_page.winfo_exists():
+                    upload_page.set_buttons_for_scan_state(is_scanning=False)
+                self._update_status_label("Scan already completed or not active.")
 
     def _perform_scan_async(self, file_path):
-        """Performs the actual scan logic in a background thread."""
         logger.info(f"Scan thread started for: {file_path}")
         scan_data = None
+        scan_thumbnails_dir = None # Initialize for cleanup in finally
+        
+        # --- Configuration for app-specific scanning ---
+        APP_FRAMES_PER_VIDEO_SAMPLE = 60  # How many frames to initially sample from a video
+        APP_MAX_FACES_TO_ANALYZE_VIDEO = 100 # Max faces to fully process from a video
+        APP_MAX_FACES_TO_ANALYZE_IMAGE = 50 # Max faces to fully process from a static image
+        THUMBNAIL_SAVE_FORMAT = "JPEG" # "PNG" or "JPEG"
+        THUMBNAIL_JPEG_QUALITY = 85
+
         try:
             self.scan_queue.put({'status': 'Extracting faces...'})
+            if self.cancel_scan_flag.is_set():
+                logger.info("Scan cancelled before face extraction."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
+
             is_video = file_path.lower().endswith(('.mp4', '.avi', '.mov'))
-            faces = self.face_extractor.extract_faces_from_video(file_path) if is_video else self.face_extractor.extract_faces_from_image(file_path)
+            
+            if is_video:
+                faces = self.face_extractor.extract_faces_from_video(
+                    file_path, 
+                    n_frames=APP_FRAMES_PER_VIDEO_SAMPLE, # Sample a moderate number of frames
+                    cancel_event=self.cancel_scan_flag,
+                    max_faces_to_return=APP_MAX_FACES_TO_ANALYZE_VIDEO # Tell extractor to stop early
+                )
+            else:
+                # For images, extract all initially, then limit if needed
+                all_faces_from_image = self.face_extractor.extract_faces_from_image(
+                    file_path, 
+                    cancel_event=self.cancel_scan_flag
+                )
+                if len(all_faces_from_image) > APP_MAX_FACES_TO_ANALYZE_IMAGE:
+                    logger.info(f"Image yielded {len(all_faces_from_image)} faces. Limiting to {APP_MAX_FACES_TO_ANALYZE_IMAGE}.")
+                    # Could do random.sample or just take the first N
+                    faces = all_faces_from_image[:APP_MAX_FACES_TO_ANALYZE_IMAGE]
+                else:
+                    faces = all_faces_from_image
+
+            if self.cancel_scan_flag.is_set():
+                logger.info("Scan cancelled during/after face extraction."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
 
             if not faces:
-                raise ValueError("No faces detected in the selected file.")
+                self.scan_queue.put({'error': "No faces detected in the selected file."}); return
 
-            self.scan_queue.put({'status': f'Found {len(faces)} faces. Saving thumbnails...'})
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") # Use consistent timestamp
-            scan_thumbnails_dir = os.path.join(self.thumbnails_dir, f"scan_{timestamp}")
+            num_faces_found = len(faces)
+            self.scan_queue.put({'status': f'Found {num_faces_found} faces. Saving thumbnails...'})
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            scan_thumbnails_dir = os.path.join(self.thumbnails_dir, f"scan_{timestamp}") # Assign for potential cleanup
             os.makedirs(scan_thumbnails_dir, exist_ok=True)
+            
             face_thumbnails_rel_paths = []
-            valid_faces_for_analysis = [] # Store faces corresponding to saved thumbs
+            valid_faces_for_analysis = [] # PIL images corresponding to saved thumbnails
 
-            for i, face in enumerate(faces):
-                thumb_path = os.path.join(scan_thumbnails_dir, f'face_{i}.png')
+            for i, face in enumerate(faces): # Iterate only over the limited/sampled faces
+                if self.cancel_scan_flag.is_set():
+                    logger.info("Scan cancelled during thumbnail saving."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
+                
+                thumb_filename = f'face_{i}.{THUMBNAIL_SAVE_FORMAT.lower()}'
+                thumb_path = os.path.join(scan_thumbnails_dir, thumb_filename)
                 try:
-                    face.save(thumb_path, "PNG")
+                    if THUMBNAIL_SAVE_FORMAT == "JPEG":
+                        face.save(thumb_path, "JPEG", quality=THUMBNAIL_JPEG_QUALITY)
+                    else:
+                        face.save(thumb_path, "PNG")
                     face_thumbnails_rel_paths.append(thumb_path)
-                    valid_faces_for_analysis.append(face) # Add face if thumb saved
+                    valid_faces_for_analysis.append(face) 
                 except Exception as save_err:
                     logger.error(f"Worker: Failed to save thumbnail {i}: {save_err}")
-                    # Skip this face if thumbnail saving fails
+
+            if self.cancel_scan_flag.is_set():
+                logger.info("Scan cancelled after thumbnail saving loop."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
 
             if not valid_faces_for_analysis:
-                raise ValueError("Failed to save any face thumbnails.")
+                self.scan_queue.put({'error': "Failed to save any face thumbnails."}); return
 
             self.scan_queue.put({'status': 'Analyzing faces...'})
             results_probabilities = []
             num_faces_to_analyze = len(valid_faces_for_analysis)
 
             for i, face_pil in enumerate(valid_faces_for_analysis):
+                if self.cancel_scan_flag.is_set():
+                    logger.info("Scan cancelled during face analysis."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
+                
                 self.scan_queue.put({'status': f'Analyzing face {i+1}/{num_faces_to_analyze}...'})
-                prediction_result = self.detector.predict_pil(face_pil) # Predict the valid face
-                if prediction_result:
-                    results_probabilities.append(prediction_result[1]) # Store probability
-                else:
-                    logger.warning(f"Worker: Prediction failed for saved face {i}")
+                prediction_result = self.detector.predict_pil(face_pil, cancel_event=self.cancel_scan_flag)
+                
+                if prediction_result is None and self.cancel_scan_flag.is_set():
+                    logger.info("Face analysis for one face was cancelled internally by detector.")
+                    # We will fall through to the main cancel check for the loop
+                    # No need to append None if we are about to exit the whole analysis.
+                    # However, if you want to record which ones were attempted before cancel, you might append None.
+                    # For simplicity, let's assume outer loop cancel is enough.
+                elif prediction_result is None:
+                    logger.warning(f"Worker: Prediction failed for face {i} (not due to cancel).")
                     results_probabilities.append(None) # Mark as failed
+                else:
+                    results_probabilities.append(prediction_result[1]) # Store probability
 
-            # Check if *any* prediction succeeded
+            if self.cancel_scan_flag.is_set():
+                logger.info("Scan cancelled after face analysis loop."); self.scan_queue.put({'status': 'Scan Cancelled'}); return
+                
             valid_results = [p for p in results_probabilities if p is not None]
-            if not valid_results:
-                raise ValueError("Face analysis failed for all saved faces.")
+            if not valid_results and not self.cancel_scan_flag.is_set():
+                self.scan_queue.put({'error': "Face analysis failed for all saved faces."}); return
 
-            scan_data = {
-                'timestamp': timestamp,
-                'file_path': file_path,
-                'results': results_probabilities, # May contain None for failed predictions
-                'face_thumbnails': face_thumbnails_rel_paths, # Paths corresponding to results
-                'detection_type': 'scanned'
-            }
-            logger.info("Worker: Scan complete.")
-            self.scan_queue.put({'result': scan_data})
+            if valid_results: # Only create scan_data if not cancelled and some results exist
+                scan_data = {
+                    'timestamp': timestamp, 
+                    'file_path': file_path,
+                    'results': results_probabilities, 
+                    'face_thumbnails': face_thumbnails_rel_paths,
+                    'detection_type': 'scanned'
+                }
+                logger.info("Worker: Scan complete (not cancelled).")
+                self.scan_queue.put({'result': scan_data})
 
         except Exception as e:
-            logger.error(f"Error during async scan for {file_path}: {e}", exc_info=True)
-            self.scan_queue.put({'error': f"Scan failed: {str(e)}"})
+            if not self.cancel_scan_flag.is_set():
+                logger.error(f"Error during async scan for {file_path}: {e}", exc_info=True)
+                self.scan_queue.put({'error': f"Scan failed: {str(e)}"})
         finally:
-            logger.debug(f"Worker: Scan thread finishing for {file_path}")
+            # Cleanup thumbnail directory if scan was cancelled and directory was created
+            if self.cancel_scan_flag.is_set() and scan_thumbnails_dir and os.path.exists(scan_thumbnails_dir):
+                try:
+                    shutil.rmtree(scan_thumbnails_dir)
+                    logger.info(f"Cleaned up thumbnails for cancelled scan: {scan_thumbnails_dir}")
+                except Exception as e_clean:
+                    logger.error(f"Error cleaning up thumbnails for cancelled scan: {e_clean}")
+            
             self.scan_queue.put({'status': 'done'})
+            logger.debug(f"Worker: Scan thread finishing for {file_path}. Cancelled: {self.cancel_scan_flag.is_set()}")
 
     def process_scan(self, scan_data):
         """Process completed scan data by showing the report."""
@@ -676,47 +782,67 @@ class FakeSeekerApp:
         self.show_detailed_report(scan_data, from_scan=True)
 
     def process_scan_queue(self):
-        """Checks the scan queue and updates UI."""
-        reschedule_check = True # Assume we need to check again
+        reschedule_check = True
         try:
-            message = self.scan_queue.get_nowait() # Non-blocking get
+            message = self.scan_queue.get_nowait()
+            upload_page = self.pages.get("UploadPage")
 
             if 'status' in message:
                 status = message['status']
-                self._update_status_label(status)
-                if status == 'done':
-                    upload_page = self.pages.get("UploadPage")
+                self._update_status_label(status) # Show intermediate status
+
+                if status == 'Scan Cancelled':
+                    logger.info("Scan was cancelled by user (received 'Scan Cancelled' status).")
+                    # Final UI updates will happen on 'done'
+                elif status == 'done':
+                    logger.info("Scan thread finished (received 'done' status).")
+                    final_status_message = "Scan finished."
+                    if self.cancel_scan_flag.is_set(): # If it was cancelled
+                        final_status_message = "Scan has been cancelled."
+                    elif hasattr(self, '_last_scan_error') and self._last_scan_error: # Check if an error occurred
+                        final_status_message = "Scan failed."
+                        del self._last_scan_error # Clear error state
+
+                    self._update_status_label(final_status_message)
+                    
+                    self.is_file_scanning = False
+                    self.cancel_scan_flag.clear()
                     if upload_page and upload_page.winfo_exists():
-                         upload_page.set_scan_button_state(tk.NORMAL)
-                    # Optionally clear status after a short delay or leave "Scan finished."
-                    # self.root.after(3000, lambda: self._update_status_label(""))
-                    reschedule_check = False # Stop checking queue
+                        upload_page.set_buttons_for_scan_state(is_scanning=False)
+                    
+                    self.root.after(3000, lambda: self._update_status_label("") if not self.is_file_scanning else None) # Clear after delay
+                    reschedule_check = False
+
             elif 'result' in message:
+                logger.info("Processing 'result' from queue.")
                 self.process_scan(message['result'])
-                # No status update here, process_scan navigates away
-                # Still need to signal done if this is the last message
+                # The 'done' message will handle final state reset.
+
             elif 'error' in message:
                 error_msg = message['error']
-                logger.error(f"Scan error from worker: {error_msg}")
+                logger.error(f"Processing 'error' from queue: {error_msg}")
                 messagebox.showerror("Scan Error", error_msg)
                 self._update_status_label("Scan failed.")
-                upload_page = self.pages.get("UploadPage")
-                if upload_page and upload_page.winfo_exists():
-                     upload_page.set_scan_button_state(tk.NORMAL)
-                reschedule_check = False # Stop checking queue
+                self._last_scan_error = True # Flag that an error occurred for the 'done' handler
+                # Final state reset will be handled by the 'done' message.
 
         except queue.Empty:
-            pass # No message yet, keep checking
+            pass
         except Exception as e:
-             logger.error(f"Error processing scan queue: {e}", exc_info=True)
-             reschedule_check = False # Stop checking on unexpected error
+            logger.error(f"Error processing scan queue: {e}", exc_info=True)
+            self.is_file_scanning = False # Emergency reset
+            self.cancel_scan_flag.clear()
+            upload_page = self.pages.get("UploadPage")
+            if upload_page and upload_page.winfo_exists():
+                upload_page.set_buttons_for_scan_state(is_scanning=False)
+            reschedule_check = False
 
-        # Reschedule check if needed
-        if reschedule_check and hasattr(self.root, 'after'): # Check root exists
-            try:
-                 self.root.after(100, self.process_scan_queue)
-            except tk.TclError:
-                 logger.warning("Failed to reschedule queue check (window closed?).")
+        if reschedule_check and (self.is_file_scanning or not self.scan_queue.empty()):
+            if hasattr(self.root, 'after') and self.root.winfo_exists():
+                try: self.root.after(100, self.process_scan_queue)
+                except tk.TclError: logger.warning("Failed to reschedule queue check.")
+        elif not self.is_file_scanning and self.scan_queue.empty():
+            logger.debug("Scan queue processing stopped (no active scan, queue empty).")
 
     def _update_status_label(self, text):
         """Safely updates the scan status label."""

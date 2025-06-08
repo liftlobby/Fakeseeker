@@ -7,6 +7,7 @@ import os
 import json
 import logging
 from typing import Tuple, Optional
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +31,13 @@ class DeepfakeDetector:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
 
-        # ... (device setup) ...
         self.user_model_dir = user_model_dir
         self.user_threshold_path = user_threshold_path
         self.optimal_threshold = 0.5 # Default
 
-        # --- Threshold Loading ---
         bundled_threshold_path = resource_path("optimal_threshold.json")
         threshold_to_load = None
 
-        # Prioritize user path
         if self.user_threshold_path and os.path.exists(self.user_threshold_path):
              logger.info(f"Attempting threshold load from user path: {self.user_threshold_path}")
              threshold_to_load = self.user_threshold_path
@@ -50,22 +48,20 @@ class DeepfakeDetector:
              logger.warning("No threshold file found (user/bundled). Using default 0.5.")
 
         if threshold_to_load:
-             try:
-                 with open(threshold_to_load, "r", encoding='utf-8') as f:
-                     data = json.load(f)
-                     self.optimal_threshold = data.get("optimal_threshold", 0.5)
-                 logger.info(f"Loaded threshold {self.optimal_threshold:.4f} from {threshold_to_load}")
-             except Exception as e:
-                 logger.error(f"Failed loading threshold from {threshold_to_load}: {e}. Default 0.5.", exc_info=True)
-                 self.optimal_threshold = 0.5
+            try:
+                with open(threshold_to_load, "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.optimal_threshold = data.get("optimal_threshold", 0.5)
+                logger.info(f"Loaded threshold {self.optimal_threshold:.4f} from {threshold_to_load}")
+            except Exception as e:
+                logger.error(f"Failed loading threshold from {threshold_to_load}: {e}. Default 0.5.", exc_info=True)
+                self.optimal_threshold = 0.5
 
-        # --- Model Loading ---
         search_paths = []
         if self.user_model_dir and os.path.exists(self.user_model_dir):
              search_paths.append(self.user_model_dir)
              logger.info(f"Adding user model dir to search path: {self.user_model_dir}")
 
-        # --- ADD FALLBACK DEFAULT MODEL PATH ---
         try:
              # Look for the 'default_model' folder bundled via resource_path
              default_model_bundled_dir = resource_path('default_model')
@@ -76,7 +72,6 @@ class DeepfakeDetector:
                   logger.info("No bundled default model directory found.")
         except Exception as e:
              logger.warning(f"Error trying to access bundled default model path: {e}")
-        # --- End Addition ---
 
         model_path = self.get_latest_model_path(search_paths) # Search both user and default
 
@@ -196,28 +191,33 @@ class DeepfakeDetector:
             logger.error(f"Error during prediction for file '{image_path}': {e}", exc_info=True)
             return None # Return None or a specific error tuple
 
-    def predict_pil(self, image: Image.Image) -> Optional[Tuple[str, float]]:
-        """Predict if a PIL image is real or fake using the optimized threshold."""
+    def predict_pil(self, image: Image.Image, cancel_event: threading.Event = None) -> Optional[Tuple[str, float]]:
+        if cancel_event and cancel_event.is_set():
+            logger.debug("Prediction cancelled before processing PIL image.")
+            return None # Or a specific "cancelled" indicator
         try:
             logger.debug("Predicting PIL image")
             image_rgb = image.convert('RGB')
-            return self._predict_common(image_rgb) # Use common internal method
+            # Pass cancel_event to _predict_common
+            return self._predict_common(image_rgb, cancel_event)
         except Exception as e:
             logger.error(f"Error during prediction for PIL image: {e}", exc_info=True)
-            return None # Return None or a specific error tuple
+            return None
 
-    def _predict_common(self, image: Image.Image) -> Tuple[str, float]:
-        """Internal method to perform prediction on a PIL image."""
+    def _predict_common(self, image: Image.Image, cancel_event: threading.Event = None) -> Optional[Tuple[str, float]]:
+        if cancel_event and cancel_event.is_set():
+            logger.debug("Prediction cancelled before tensor transformation.")
+            return None
+
         image_tensor = self.transform(image).unsqueeze(0).to(self.device)
-
         with torch.no_grad():
             output = self.model(image_tensor)
-            # Inside _predict_common
+            if cancel_event and cancel_event.is_set(): # Check after model inference
+                logger.debug("Prediction cancelled after model inference.")
+                return None
             probabilities = torch.softmax(output, dim=1)[0]
-            # Assuming class 1 = FAKE, class 0 = REAL (verify based on training labels)
             probability_fake = probabilities[1].item()
 
-        # Apply the threshold to the probability of the 'FAKE' class
         result = "FAKE" if probability_fake >= self.optimal_threshold else "REAL"
-        logger.debug(f"Prediction: {result} (Fake Probability: {probability_fake:.4f}, Threshold: {self.optimal_threshold:.4f})")
-        return result, probability_fake # Return label and raw probability of FAKE
+        logger.debug(f"Prediction: {result} (Fake Prob: {probability_fake:.4f}, Thresh: {self.optimal_threshold:.4f})")
+        return result, probability_fake
