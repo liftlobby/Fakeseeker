@@ -27,9 +27,13 @@ def resource_path(relative_path):
     return path
 
 class DeepfakeDetector:
-    def __init__(self, model_version='efficientnet-b2', user_model_dir=None, user_threshold_path=None):
+    def __init__(self, model_version='efficientnet-b0', image_size=224,
+                 user_model_dir=None, user_threshold_path=None):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
+
+        self.model_architecture_name = model_version
+        self.image_size = image_size
 
         self.user_model_dir = user_model_dir
         self.user_threshold_path = user_threshold_path
