@@ -1,4 +1,4 @@
-# FakeSeeker: AI-Powered Deepfake Detection
+# FakeSeeker: A Deepfake Image Detection Using EfficientNet
 
 Welcome to FakeSeeker! This application is designed to help you detect deepfake images and videos using advanced AI.
 
@@ -26,9 +26,9 @@ This guide will help you download and run FakeSeeker on your computer.
 
 **What You Need:**
 
-*   A Windows computer (This guide assumes Windows 10/11).
+*   A Windows 10/11 computer.
 *   An internet connection (for the initial download and for model updates).
-*   A tool to extract `.7z` files, such as [7-Zip (free)](https://www.7-zip.org/) or WinRAR. (Windows does not have built-in support for `.7z` files).
+*   A tool to extract `.7z` files, such as [7-Zip (free)](https://www.7-zip.org/) or WinRAR.
 
 **Steps:**
 
@@ -40,14 +40,14 @@ This guide will help you download and run FakeSeeker on your computer.
     *   The download size is under 2GB, so it may take some time depending on your internet speed. Wait for the download to complete.
 
 2.  **Extract the Application:**
-    *   Locate the downloaded `FakeSeeker_vX.Y.Z.7z` file (usually in your "Downloads" folder).
+    *   Locate the downloaded `FakeSeeker.7z` file (usually in your "Downloads" folder).
     *   Right-click on the `.7z` file.
-    *   If you have 7-Zip installed: Select "7-Zip" -> "Extract to FakeSeeker_vX.Y.Z\\".
-    *   If you have WinRAR: Select "Extract to FakeSeeker_vX.Y.Z\\".
-    *   This will create a new folder named `FakeSeeker` (or `FakeSeeker_vX.Y.Z`).
+    *   If you have 7-Zip installed: Select "7-Zip" -> "Extract to FakeSeeker\\".
+    *   If you have WinRAR: Select "Extract to FakeSeeker\\".
+    *   This will create a new folder named `FakeSeeker`.
 
 3.  **Run FakeSeeker:**
-    *   Open the folder that was just created (e.g., `FakeSeeker`).
+    *   Open the folder that was just created.
     *   Inside this folder, find the file named `FakeSeeker.exe`.
     *   Double-click on **`FakeSeeker.exe`** to start the application.
     *   **Windows Security Note:** The first time you run it, Windows Defender SmartScreen might show a blue window saying "Windows protected your PC".
@@ -59,14 +59,14 @@ This guide will help you download and run FakeSeeker on your computer.
 ## 2. User Manual
 
 ### 2.1 Home Page
-*(Screenshot of your Home Page here if possible)*
+![Home Page](https://github.com/liftlobby/Fakeseeker/images/Interfaces/homepage.png)
 The Home Page is your starting point. It provides:
 *   A welcome message.
 *   Three main action buttons to access FakeSeeker's core features.
 *   Brief instructions on how to use the application.
 
 ### 2.2 Uploading and Scanning Media (Image/Video)
-*(Screenshot of your Upload Page with a file selected and preview visible)*
+![Upload Page](https://github.com/liftlobby/Fakeseeker/images/Interfaces/uploadpage.png)
 This feature allows you to analyze static image or video files stored on your computer.
 
 1.  **Navigate:** From the Home Page or Sidebar, click "Upload Image/Video".
@@ -84,7 +84,7 @@ This feature allows you to analyze static image or video files stored on your co
     *   If you chose to save the scan, it will also appear in your Scan History.
 
 ### 2.3 Real-Time Detection
-*(Screenshot of your Real-Time Page, perhaps with camera feed active)*
+![Real-Time Page](https://github.com/liftlobby/Fakeseeker/images/Interfaces/realtime.png)
 FakeSeeker can analyze faces live from your computer's camera or by monitoring your screen.
 
 #### 2.3.1 Camera Detection
@@ -120,7 +120,7 @@ FakeSeeker can analyze faces live from your computer's camera or by monitoring y
     *   Alternatively, closing the toolbar via its 'X' button will also stop monitoring and show the main window.
 
 ### 2.4 Viewing Scan History
-*(Screenshot of your History Page with a few cards)*
+![History Page](https://github.com/liftlobby/Fakeseeker/images/Interfaces/historypage.png)
 Keep track of all your past analyses.
 1.  **Navigate:** From the Home Page or Sidebar, click "View Scan History".
 2.  **Browse History:**
@@ -131,7 +131,7 @@ Keep track of all your past analyses.
     *   **Delete:** Click the "**Delete**" button to remove that scan entry and its associated thumbnails from your history. You will be asked to confirm.
 
 ### 2.5 Understanding Scan Reports
-*(Screenshot of your Report Page showing a result)*
+![Report Page](https://github.com/liftlobby/Fakeseeker/images/Interfaces/reportpage.png)
 The Detailed Scan Report provides an in-depth look at the analysis.
 *   **Detection Summary:** Shows the overall status ("Potential Deepfake" or "Likely Real") and the average fake probability calculated from all analyzed faces, compared against the optimal threshold.
 *   **File Details (for uploaded files):** Information like file size, type, resolution, and modification dates.
@@ -141,7 +141,7 @@ The Detailed Scan Report provides an in-depth look at the analysis.
     *   For "Real-Time Summary" reports, only representative face thumbnails are shown without individual predictions.
 
 ### 2.6 Sidebar Navigation
-*(Optional: Small screenshot focusing on the expanded sidebar)*
+![Sidebar](https://github.com/liftlobby/Fakeseeker/images/Interfaces/sidebar.png)
 The sidebar on the left (visible on most pages except Home) provides quick navigation:
 *   **Hover:** Move your mouse over the sidebar to expand it and see button labels.
 *   **Click:** Click an icon or label to navigate to the corresponding page (Upload, Real-Time, History, Home).
@@ -183,9 +183,3 @@ FakeSeeker will automatically check for new versions of the detection model and 
     *   For rotated videos, ensure the rotation fix (requiring FFmpeg) is working.
 
 ---
-
-## 4. About & Contact (Optional)
-
-*   **Developed by:** Chua Kai Zen (Universiti Tun Hussein Onn Malaysia - UTHM)
-*   **Project Repository:** [https://github.com/liftlobby/Fakeseeker](https://github.com/liftlobby/Fakeseeker)
-*   For issues or suggestions, please open an issue on the GitHub repository.

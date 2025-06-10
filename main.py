@@ -300,7 +300,7 @@ class FakeSeekerApp:
         # --- Footer Frame (Packed FIRST at the absolute bottom of ROOT) ---
         footer_frame = ttk.Frame(self.root)
         footer_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5, padx=10)
-        ttk.Label(footer_frame, text="Version Beta - Enhanced with EfficientNet-b2", style='TLabel').pack(side=tk.LEFT, padx=10)
+        ttk.Label(footer_frame, text="Version 1.3 - Enhanced with EfficientNet-b0", style='TLabel').pack(side=tk.LEFT, padx=10)
         ttk.Button(footer_frame, text="Exit", command=self.on_closing).pack(side=tk.RIGHT, padx=10)
 
         # --- Top Area Frame (Holds Sidebar and Main Area) ---
