@@ -113,74 +113,57 @@ class DeepfakeDetector:
             raise
 
     def get_latest_model_path(self, search_paths: list) -> Optional[str]:
-        """Finds the latest model file within provided search paths.
-           Searches within 'run_*/' subdirs first, then for loose '.pth' files."""
-        best_model_found = None
+        """Finds the model. Prioritizes user directory, then bundled default.
+           Within each, searches 'run_*/' subdirs first, then loose '.pth' files, latest by timestamp.
+        """
+        logger.info(f"Searching for models. Search paths (priority implied by order): {search_paths}")
+        
+        # search_paths is expected to be [user_model_dir, bundled_default_dir]
+        # The first element (user_model_dir) has higher priority.
 
-        if not search_paths:
-            logger.warning("No search paths provided to get_latest_model_path.")
-            return None
-
-        logger.info(f"Searching for models in: {search_paths}")
-
-        # --- Search within run_* subdirectories first ---
-        all_run_dirs = []
-        for base_path in search_paths:
+        for i, base_path in enumerate(search_paths):
+            is_user_path = (i == 0 and base_path == self.user_model_dir) # Assuming user_model_dir is always first if present
+            path_type_log = "user" if is_user_path else "bundled default"
+            
             if not os.path.isdir(base_path):
-                logger.warning(f"Search path is not a directory: {base_path}")
+                logger.debug(f"Search path ({path_type_log}) is not a directory: {base_path}")
                 continue
+            
+            logger.debug(f"Searching in {path_type_log} path: {base_path}")
+
+            # 1. Search within run_* subdirectories
             try:
                 potential_runs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d)) and d.startswith('run_')]
-                all_run_dirs.extend([os.path.join(base_path, d) for d in potential_runs])
-            except OSError as e:
-                logger.error(f"OSError accessing search path {base_path}: {e}")
-
-        if all_run_dirs:
-            logger.debug(f"Found {len(all_run_dirs)} potential run directories.")
-            try:
-                # Sort runs by modification time to check the latest first
-                all_run_dirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                latest_run_dir = all_run_dirs[0]
-                logger.info(f"Latest run directory found: {latest_run_dir}")
-
-                # Find best or final model within the latest run
-                model_files = [f for f in os.listdir(latest_run_dir) if (f.startswith('best_model') or f.startswith('final_model')) and f.endswith('.pth')]
-                if model_files:
-                    full_model_paths = [os.path.join(latest_run_dir, f) for f in model_files]
-                    full_model_paths.sort(key=os.path.getmtime, reverse=True) # Get most recent model file
-                    best_model_found = full_model_paths[0]
-                    logger.info(f"Found latest model in run directory: {best_model_found}")
-                else:
-                    logger.warning(f"No best_model or final_model found in latest run dir: {latest_run_dir}")
-
+                if potential_runs:
+                    potential_runs_full_paths = [os.path.join(base_path, d) for d in potential_runs]
+                    potential_runs_full_paths.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    latest_run_dir = potential_runs_full_paths[0]
+                    logger.info(f"Latest run directory in {path_type_log} path: {latest_run_dir}")
+                    
+                    model_files_in_run = [f for f in os.listdir(latest_run_dir) if (f.startswith('best_model') or f.startswith('final_model')) and f.endswith('.pth')]
+                    if model_files_in_run:
+                        full_model_paths_in_run = [os.path.join(latest_run_dir, f) for f in model_files_in_run]
+                        full_model_paths_in_run.sort(key=os.path.getmtime, reverse=True)
+                        selected_model = full_model_paths_in_run[0]
+                        logger.info(f"FOUND model in {path_type_log} run directory: {selected_model}. Using this.")
+                        return selected_model # Prioritize this find
             except Exception as e:
-                logger.error(f"Error processing run directories: {e}", exc_info=True)
-        else:
-            logger.info("No 'run_*' subdirectories found in any search path.")
+                logger.error(f"Error processing run directories in {path_type_log} path {base_path}: {e}", exc_info=True)
 
-        # --- If no model found in run_* dirs, search for loose .pth files (e.g., default model) ---
-        if best_model_found is None:
-            logger.info("No model found in run_* dirs. Searching for loose .pth files in search paths...")
-            all_loose_models = []
-            for base_path in search_paths:
-                if not os.path.isdir(base_path): continue # Skip if not dir
-                try:
-                    loose_files = [os.path.join(base_path, f) for f in os.listdir(base_path) if os.path.isfile(os.path.join(base_path, f)) and f.endswith('.pth')]
-                    all_loose_models.extend(loose_files)
-                except OSError as e:
-                    logger.error(f"OSError searching for loose models in {base_path}: {e}")
-
-            if all_loose_models:
-                logger.info(f"Found {len(all_loose_models)} loose .pth files. Selecting latest.")
-                all_loose_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                # Select the overall latest loose model found
-                best_model_found = all_loose_models[0]
-            else:
-                logger.error("No run_* directories AND no loose .pth models found in any search path.")
-                return None # Truly no model found
-
-        logger.info(f"Selected final model file: {best_model_found}")
-        return best_model_found
+            # 2. If no model in run_* subdirs of this base_path, search for loose .pth files in this base_path
+            try:
+                loose_models_in_path = [os.path.join(base_path, f) for f in os.listdir(base_path) if os.path.isfile(os.path.join(base_path, f)) and f.endswith('.pth')]
+                if loose_models_in_path:
+                    loose_models_in_path.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    selected_model = loose_models_in_path[0] # Latest loose model in *this specific path*
+                    logger.info(f"FOUND loose model in {path_type_log} path: {selected_model}. Using this.")
+                    return selected_model # Prioritize this find
+            except OSError as e:
+                logger.error(f"OSError searching for loose models in {path_type_log} path {base_path}: {e}")
+        
+        # If loop completes, no model was found in any search path
+        logger.error("CRITICAL: No model found in any search path after checking user and default locations.")
+        return None
 
     def predict(self, image_path: str) -> Optional[Tuple[str, float]]:
         """Predict if an image file is real or fake using the optimized threshold."""
